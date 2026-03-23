@@ -445,45 +445,57 @@ async def _send_charts(
 
     # 1. Goals progress
     if "goals" in chart_types and goals:
-        img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
-        if img:
-            msg = await context.bot.send_photo(
-                chat_id=uid,
-                photo=BytesIO(img),
-                caption=t(l, "chart_goals_caption"),
-            )
-            chart_msg_ids.append(msg.message_id)
-            sent_any = True
+        try:
+            img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
+            if img:
+                msg = await context.bot.send_photo(
+                    chat_id=uid,
+                    photo=BytesIO(img),
+                    caption=t(l, "chart_goals_caption"),
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                chart_msg_ids.append(msg.message_id)
+                sent_any = True
+        except Exception as e:
+            logger.warning(f"Goals chart failed: {e}")
 
     # 2. Expense pie
     by_cat = stats.get("by_category", {})
     if "pie" in chart_types and by_cat:
-        img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
-        if img:
-            msg = await context.bot.send_photo(
-                chat_id=uid,
-                photo=BytesIO(img),
-                caption=t(l, "chart_pie_caption"),
-            )
-            chart_msg_ids.append(msg.message_id)
-            sent_any = True
+        try:
+            img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
+            if img:
+                msg = await context.bot.send_photo(
+                    chat_id=uid,
+                    photo=BytesIO(img),
+                    caption=t(l, "chart_pie_caption"),
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                chart_msg_ids.append(msg.message_id)
+                sent_any = True
+        except Exception as e:
+            logger.warning(f"Pie chart failed: {e}")
 
     # 3. Income vs expenses bar
     if "bar" in chart_types and txns:
-        img = ch.generate_bar_chart(
-            txns, bar_period,
-            income_label=t(l, "income"),
-            expense_label=t(l, "expense"),
-            title=t(l, "chart_bar_title"),
-        )
-        if img:
-            msg = await context.bot.send_photo(
-                chat_id=uid,
-                photo=BytesIO(img),
-                caption=t(l, "chart_bar_caption"),
+        try:
+            img = ch.generate_bar_chart(
+                txns, bar_period,
+                income_label=t(l, "income"),
+                expense_label=t(l, "expense"),
+                title=t(l, "chart_bar_title"),
             )
-            chart_msg_ids.append(msg.message_id)
-            sent_any = True
+            if img:
+                msg = await context.bot.send_photo(
+                    chat_id=uid,
+                    photo=BytesIO(img),
+                    caption=t(l, "chart_bar_caption"),
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                chart_msg_ids.append(msg.message_id)
+                sent_any = True
+        except Exception as e:
+            logger.warning(f"Bar chart failed: {e}")
 
     # Store IDs so cb_back_stats can clean them up
     context.user_data["stats_chart_msg_ids"] = chart_msg_ids
