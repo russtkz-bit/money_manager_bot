@@ -1,6 +1,6 @@
 """
 Money Manager Telegram Bot
-Tracks income/expenses, goals, currencies, and provides AI market analysis.
+Tracks income/expenses, goals, currencies, and provides financial statistics.
 """
 
 import os
@@ -848,11 +848,6 @@ async def handle_view_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=back_keyboard(uid, "menu_goals"),
         parse_mode=ParseMode.MARKDOWN
     )
-
-
-# ─────────────────── AI ASSISTANT ───────────────────
-
-
 
 
 # ─────────────────── SETTINGS ───────────────────
