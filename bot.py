@@ -174,6 +174,25 @@ def stats_period_keyboard(uid: int) -> InlineKeyboardMarkup:
     ])
 
 
+def stats_chart_type_keyboard(uid: int, selected: set) -> InlineKeyboardMarkup:
+    l = lang(uid)
+
+    def btn(label_key: str, key: str) -> InlineKeyboardButton:
+        mark = "\u2705" if key in selected else "\u2b1c"
+        return InlineKeyboardButton(
+            f"{mark} {t(l, label_key)}",
+            callback_data=f"schrt_toggle_{key}",
+        )
+
+    return InlineKeyboardMarkup([
+        [btn("chart_goals_caption", "goals"),
+         btn("chart_pie_caption",   "pie")],
+        [btn("chart_bar_caption",   "bar")],
+        [InlineKeyboardButton(t(l, "stats_generate"), callback_data="schrt_generate")],
+        [InlineKeyboardButton(t(l, "back"), callback_data="back_stats")],
+    ])
+
+
 def goals_select_keyboard(goals: list, callback_prefix: str, uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
     rows = []
@@ -448,11 +467,15 @@ async def _send_charts(
         summary += "\n" + t(l, "stats_no_data_period")
 
     # ── Send charts, track IDs so Back can delete them ──
+    # Default: all chart types enabled
+    if chart_types is None:
+        chart_types = {"goals", "pie", "bar"}
+
     chart_msg_ids: list = []
     sent_any = False
 
     # 1. Goals progress
-    if goals:
+    if "goals" in chart_types and goals:
         img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
         if img:
             msg = await context.bot.send_photo(
@@ -465,7 +488,7 @@ async def _send_charts(
 
     # 2. Expense pie
     by_cat = stats.get("by_category", {})
-    if by_cat:
+    if "pie" in chart_types and by_cat:
         img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
         if img:
             msg = await context.bot.send_photo(
@@ -477,7 +500,7 @@ async def _send_charts(
             sent_any = True
 
     # 3. Income vs expenses bar
-    if txns:
+    if "bar" in chart_types and txns:
         img = ch.generate_bar_chart(
             txns, bar_period,
             income_label=t(l, "income"),
@@ -539,7 +562,65 @@ async def cb_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "6m":    t(l, "stats_period_6m"),
         "year":  t(l, "stats_period_year"),
     }
-    await _send_charts(update, context, uid, start, end, bar, labels.get(key, key))
+    label = labels.get(key, key)
+
+    # Store period details, init chart selection (all enabled by default)
+    context.user_data["stats_pending"] = {
+        "start": start, "end": end, "bar": bar, "label": label
+    }
+    if "stats_chart_types" not in context.user_data:
+        context.user_data["stats_chart_types"] = {"goals", "pie", "bar"}
+
+    await query.edit_message_text(
+        t(l, "stats_choose_charts"),
+        reply_markup=stats_chart_type_keyboard(
+            uid, context.user_data["stats_chart_types"]
+        ),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+
+
+# ── chart type toggle / generate ──
+async def cb_schrt_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    key = query.data[len("schrt_toggle_"):]   # goals / pie / bar
+
+    selected: set = context.user_data.get("stats_chart_types", {"goals", "pie", "bar"})
+    if key in selected:
+        selected.discard(key)
+    else:
+        selected.add(key)
+    context.user_data["stats_chart_types"] = selected
+
+    await query.edit_message_reply_markup(
+        reply_markup=stats_chart_type_keyboard(uid, selected)
+    )
+
+
+async def cb_schrt_generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+
+    pending = context.user_data.get("stats_pending")
+    if not pending:
+        await query.edit_message_text(t(l, "error"), parse_mode=ParseMode.MARKDOWN)
+        return
+
+    selected: set = context.user_data.get("stats_chart_types", {"goals", "pie", "bar"})
+    if not selected:
+        await query.answer(t(l, "stats_no_chart_selected"), show_alert=True)
+        return
+
+    await _send_charts(
+        update, context, uid,
+        pending["start"], pending["end"], pending["bar"], pending["label"],
+        chart_types=selected,
+    )
 
 
 # ── conversation: custom date range ──
@@ -591,76 +672,25 @@ async def stats_custom_got_end(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(t(l, "stats_end_before_start"))
         return S_STATS_CUSTOM_END
 
-    days      = (end_dt - start_dt).days
-    bar       = ch.period_for_days(days)
-    label     = f"{start_str} — {end_str}"
+    days  = (end_dt - start_dt).days
+    bar   = ch.period_for_days(days)
+    label = f"{start_str} — {end_str}"
 
-    # We need a fake Update-like object for _send_charts; send directly instead
-    # Build a minimal context by sending a placeholder message first
-    msg = await update.message.reply_text(
-        t(l, "stats_generating"), parse_mode=ParseMode.MARKDOWN
-    )
+    # Store period details so cb_schrt_generate can use them
+    context.user_data["stats_pending"] = {
+        "start": start_str, "end": end_str, "bar": bar, "label": label
+    }
+    if "stats_chart_types" not in context.user_data:
+        context.user_data["stats_chart_types"] = {"goals", "pie", "bar"}
 
-    stats = db.get_statistics_filtered(uid, start_str, end_str)
-    txns  = db.get_transactions_filtered(uid, start_str, end_str)
-    goals = db.get_goals(uid)
-
-    total_income  = sum(stats["income"].values())
-    total_expense = sum(stats["expense"].values())
-    balance       = total_income - total_expense
-
-    summary = t(l, "stats_period_header", period=label)
-    summary += t(l, "stats_balance", balance=f"{balance:,.2f}", currency="")
-    summary += t(l, "stats_income",  amount=f"{total_income:,.2f}",  currency="")
-    summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency="")
-
-    sent_any = False
-    chart_msg_ids: list = []
-
-    if goals:
-        img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
-        if img:
-            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_goals_caption"))
-            chart_msg_ids.append(pm.message_id)
-            sent_any = True
-
-    by_cat = stats.get("by_category", {})
-    if by_cat:
-        img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
-        if img:
-            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_pie_caption"))
-            chart_msg_ids.append(pm.message_id)
-            sent_any = True
-
-    if txns:
-        img = ch.generate_bar_chart(
-            txns, bar,
-            income_label=t(l, "income"),
-            expense_label=t(l, "expense"),
-            title=t(l, "chart_bar_title"),
-        )
-        if img:
-            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_bar_caption"))
-            chart_msg_ids.append(pm.message_id)
-            sent_any = True
-
-    if not sent_any:
-        summary += "\n\n" + t(l, "stats_no_charts")
-
-    # Store chart IDs so back_stats can clean them up
-    context.user_data["stats_chart_msg_ids"] = chart_msg_ids
-
+    # Show chart type picker as a new message (we're in a conversation, no query)
     await update.message.reply_text(
-        summary,
-        reply_markup=back_keyboard(uid, "back_stats"),
+        t(l, "stats_choose_charts"),
+        reply_markup=stats_chart_type_keyboard(
+            uid, context.user_data["stats_chart_types"]
+        ),
         parse_mode=ParseMode.MARKDOWN,
     )
-    # Delete the "Generating..." placeholder
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
     return ConversationHandler.END
 
 
@@ -1453,6 +1483,10 @@ def build_application() -> Application:
 
     # Stats period buttons (week / month / 6m / year)
     app.add_handler(CallbackQueryHandler(cb_stats_period, pattern="^stats_p_(week|month|6m|year)$"))
+
+    # Chart type toggle buttons and generate
+    app.add_handler(CallbackQueryHandler(cb_schrt_toggle,   pattern="^schrt_toggle_"))
+    app.add_handler(CallbackQueryHandler(cb_schrt_generate, pattern="^schrt_generate$"))
 
     return app
 
