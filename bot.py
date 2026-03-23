@@ -145,7 +145,6 @@ def settings_keyboard(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(l, "btn_change_language"), callback_data="settings_language")],
         [InlineKeyboardButton(t(l, "btn_change_currency"), callback_data="settings_base_currency")],
-        [InlineKeyboardButton(t(l, "btn_status_notifications"), callback_data="settings_status_notifications")],
         [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
     ])
 
@@ -274,33 +273,6 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, uid)
 
 
-# ─────────────────── BOT STATUS NOTIFICATIONS ───────────────────
-
-async def broadcast_status_notification(app: Application, status: str) -> int:
-    """Send bot status notification to all users who opted in."""
-    users = db.get_all_users_for_notifications()
-    notified_count = 0
-    
-    for uid in users:
-        try:
-            l = db.get_user_lang(uid)
-            if status == "online":
-                message = t(l, "bot_online")
-            else:
-                message = t(l, "bot_offline")
-            
-            await app.bot.send_message(
-                chat_id=uid,
-                text=message,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            notified_count += 1
-        except Exception as e:
-            logger.warning(f"Failed to notify user {uid}: {e}")
-    
-    return notified_count
-
-
 # ─────────────────── MAIN MENU ROUTING ───────────────────
 
 async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -342,10 +314,6 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=language_keyboard(),
             parse_mode=ParseMode.MARKDOWN
         )
-    elif query.data == "settings_status_notifications":
-        await cb_settings_status_notifications(update, context)
-    elif query.data.startswith("settings_status_notifications_"):
-        await cb_toggle_status_notifications(update, context)
     elif query.data == "trans_view":
         await handle_view_transactions(update, context)
     
@@ -878,55 +846,6 @@ async def cb_set_base_currency(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode=ParseMode.MARKDOWN
     )
     return ConversationHandler.END
-
-
-async def cb_settings_status_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
-    notify = db.get_user_notify_on_status(uid)
-    
-    if notify:
-        text = t(l, "status_notifications_on")
-        next_action = "settings_status_notifications_disable"
-    else:
-        text = t(l, "status_notifications_off")
-        next_action = "settings_status_notifications_enable"
-    
-    await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                t(l, "btn_no") if notify else t(l, "btn_yes"),
-                callback_data=next_action
-            )],
-            [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
-        ]),
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-
-async def cb_toggle_status_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
-    
-    if query.data == "settings_status_notifications_enable":
-        db.set_user_notify_on_status(uid, True)
-        await query.edit_message_text(
-            t(l, "status_notifications_enabled"),
-            reply_markup=back_keyboard(uid),
-            parse_mode=ParseMode.MARKDOWN
-        )
-    else:
-        db.set_user_notify_on_status(uid, False)
-        await query.edit_message_text(
-            t(l, "status_notifications_disabled"),
-            reply_markup=back_keyboard(uid),
-            parse_mode=ParseMode.MARKDOWN
-        )
 
 
 # ─────────────────── ADD TRANSACTION ───────────────────
@@ -1465,7 +1384,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(
         cb_main_menu,
         pattern="^(back_main|menu_transactions|menu_goals|menu_currencies|"
-                "menu_stats|menu_settings|settings_language|settings_status_notifications|"
+                "menu_stats|menu_settings|settings_language|"
                 "trans_view|trans_clear|goal_view)$"
     ))
 
@@ -1486,63 +1405,20 @@ def build_application() -> Application:
     return app
 
 
-# Minimum uptime in seconds before an offline notification is sent.
-# Prevents a false offline alert when startup fails due to 409 Conflict.
-_MIN_UPTIME_FOR_OFFLINE_NOTIFY = 15
-
 
 async def on_bot_start(app: Application) -> None:
-    """Called when bot starts - set commands and notify users."""
-    # Record startup time so on_bot_stop can check actual uptime
-    app.bot_data["startup_time"] = datetime.now()
-
+    """Set bot commands on startup."""
     await app.bot.set_my_commands([
         BotCommand("start", "Start / Language select"),
         BotCommand("menu", "Open main menu"),
         BotCommand("cancel", "Cancel current action"),
     ])
-
-    notified = await broadcast_status_notification(app, "online")
-    db.log_bot_status("online", notified)
-    logger.info(f"\u2705 Bot online notifications sent to {notified} users")
-
-
-async def on_bot_stop(app: Application) -> None:
-    """Called on post_stop - HTTP client is still alive here.
-
-    Guard: if the bot stopped within _MIN_UPTIME_FOR_OFFLINE_NOTIFY seconds
-    of starting (e.g. 409 Conflict because another instance is running),
-    skip the offline notification. The user already received an online message
-    from the surviving instance; sending offline right after would be confusing.
-    """
-    startup_time = app.bot_data.get("startup_time")
-    if startup_time is not None:
-        uptime = (datetime.now() - startup_time).total_seconds()
-        if uptime < _MIN_UPTIME_FOR_OFFLINE_NOTIFY:
-            logger.info(
-                f"Skipping offline notification - uptime only {uptime:.1f}s "
-                f"(threshold {_MIN_UPTIME_FOR_OFFLINE_NOTIFY}s). "
-                f"Likely a startup conflict, not a real shutdown."
-            )
-            return
-
-    try:
-        notified = await broadcast_status_notification(app, "offline")
-        db.log_bot_status("offline", notified)
-        logger.info(f"\U0001f534 Bot offline notifications sent to {notified} users")
-    except Exception as e:
-        logger.warning(f"Could not send offline notifications: {e}")
+    logger.info("\u2705 Money Manager Bot commands registered")
 
 
 if __name__ == "__main__":
     db.init_db()
     app = build_application()
-
-    # post_init  -> runs after the HTTP client is ready (good for "bot online" msg)
-    # post_stop  -> runs before the HTTP client is torn down (good for "bot offline" msg)
-    # post_shutdown would be too late - the HTTP client is already closed there
     app.post_init = on_bot_start
-    app.post_stop = on_bot_stop
-
     logger.info("\u2705 Money Manager Bot started!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
