@@ -1,7 +1,7 @@
 LANGUAGES = {
     "en": {
         # General
-        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and get AI-powered market insights.\n\nPlease choose your language / Выберите язык:",
+        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and view financial statistics.\n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
@@ -17,7 +17,6 @@ LANGUAGES = {
         "btn_transactions": "💸 Transactions",
         "btn_goals": "🎯 Goals",
         "btn_currencies": "💱 Currencies",
-        "btn_ai_assistant": "🤖 AI Assistant",
         "btn_statistics": "📊 Statistics",
         "btn_settings": "⚙️ Settings",
         "btn_add_income": "➕ Add Income",
@@ -85,14 +84,6 @@ LANGUAGES = {
         "fetching_rates": "⏳ Fetching live rates...",
         "rates_error": "⚠️ Could not fetch some rates. Please try again later.",
 
-        # AI Assistant
-        "ai_intro": "🤖 *AI Financial Assistant*\n\nI analyze current market conditions (crypto, gold, forex, news) and provide personalized recommendations based on your financial data.\n\nWhat would you like to know?",
-        "ai_btn_market": "📈 Market Overview",
-        "ai_btn_advice": "💡 Personal Advice",
-        "ai_btn_goal_advice": "🎯 Goal Strategy",
-        "ai_btn_custom": "💬 Ask a Question",
-        "ai_thinking": "🤔 Analyzing market data and your finances...",
-        "enter_ai_question": "💬 Type your question for the AI assistant:",
 
         # Statistics
         "stats_header": "📊 *Your Financial Statistics*\n\n",
@@ -162,7 +153,7 @@ LANGUAGES = {
 
     "ru": {
         # General
-        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и получать советы от ИИ.\n\nПожалуйста, выберите язык / Please choose your language:",
+        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и просматривать финансовую статистику.\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
@@ -178,7 +169,6 @@ LANGUAGES = {
         "btn_transactions": "💸 Транзакции",
         "btn_goals": "🎯 Цели",
         "btn_currencies": "💱 Валюты",
-        "btn_ai_assistant": "🤖 ИИ-ассистент",
         "btn_statistics": "📊 Статистика",
         "btn_settings": "⚙️ Настройки",
         "btn_add_income": "➕ Добавить доход",
@@ -246,14 +236,6 @@ LANGUAGES = {
         "fetching_rates": "⏳ Получение актуальных курсов...",
         "rates_error": "⚠️ Не удалось получить некоторые курсы. Попробуйте позже.",
 
-        # AI Assistant
-        "ai_intro": "🤖 *ИИ-финансовый ассистент*\n\nЯ анализирую текущие рыночные условия (крипто, золото, валюты, новости) и даю персональные рекомендации на основе ваших финансовых данных.\n\nЧто вы хотите узнать?",
-        "ai_btn_market": "📈 Обзор рынка",
-        "ai_btn_advice": "💡 Личные советы",
-        "ai_btn_goal_advice": "🎯 Стратегия по целям",
-        "ai_btn_custom": "💬 Задать вопрос",
-        "ai_thinking": "🤔 Анализирую рыночные данные и ваши финансы...",
-        "enter_ai_question": "💬 Введите ваш вопрос для ИИ-ассистента:",
 
         # Statistics
         "stats_header": "📊 *Ваша финансовая статистика*\n\n",
