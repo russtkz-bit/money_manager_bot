@@ -20,7 +20,6 @@ def init_db():
                 user_id     INTEGER PRIMARY KEY,
                 language    TEXT    DEFAULT 'en',
                 base_currency TEXT  DEFAULT 'USD',
-                notify_on_status INTEGER DEFAULT 1,
                 created_at  TEXT    DEFAULT (datetime('now'))
             );
 
@@ -49,13 +48,6 @@ def init_db():
                 created_at      TEXT    DEFAULT (datetime('now')),
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
-
-            CREATE TABLE IF NOT EXISTS bot_status_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                status      TEXT    NOT NULL,
-                timestamp   TEXT    DEFAULT (datetime('now')),
-                notified_count INTEGER DEFAULT 0
-            );
         """)
         conn.commit()
 
@@ -74,8 +66,6 @@ def _run_migrations():
 
         # List of (column_name, ALTER TABLE sql) to apply if missing
         migrations = [
-            ("notify_on_status",
-             "ALTER TABLE users ADD COLUMN notify_on_status INTEGER DEFAULT 1"),
             ("base_currency",
              "ALTER TABLE users ADD COLUMN base_currency TEXT DEFAULT 'USD'"),
         ]
@@ -127,46 +117,6 @@ def get_user_base_currency(user_id: int) -> str:
     return user["base_currency"] if user else "USD"
 
 
-def set_user_notify_on_status(user_id: int, notify: bool):
-    """Set whether user wants to receive bot status notifications."""
-    ensure_user(user_id)
-    with get_connection() as conn:
-        conn.execute("UPDATE users SET notify_on_status = ? WHERE user_id = ?", (1 if notify else 0, user_id))
-        conn.commit()
-
-
-def get_user_notify_on_status(user_id: int) -> bool:
-    """Get user's notification preference for bot status."""
-    user = get_user(user_id)
-    return bool(user["notify_on_status"]) if user else True
-
-
-def get_all_users_for_notifications() -> List[int]:
-    """Get all users who want to receive bot status notifications."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT user_id FROM users WHERE notify_on_status = 1"
-        ).fetchall()
-        return [row["user_id"] for row in rows]
-
-
-def log_bot_status(status: str, notified_count: int = 0):
-    """Log bot status change (online/offline)."""
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO bot_status_log (status, notified_count) VALUES (?, ?)",
-            (status, notified_count)
-        )
-        conn.commit()
-
-
-def get_last_bot_status() -> Optional[Dict]:
-    """Get the last recorded bot status."""
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM bot_status_log ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
 
 
 # ──────────────── TRANSACTIONS ────────────────
