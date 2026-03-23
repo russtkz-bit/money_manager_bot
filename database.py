@@ -226,13 +226,17 @@ def get_statistics(user_id: int) -> Dict[str, Any]:
 # ──────────────── GOALS ────────────────
 
 def add_goal(user_id: int, title: str, goal_type: str,
-             target_amount: float, currency: str, deadline: Optional[str] = None) -> int:
+             target_amount: float, currency: str, deadline: Optional[str] = None,
+             initial_amount: float = 0.0) -> int:
     ensure_user(user_id)
+    completed = 1 if initial_amount >= target_amount else 0
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO goals (user_id, title, goal_type, target_amount, currency, deadline) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, title, goal_type, target_amount, currency, deadline)
+            "INSERT INTO goals "
+            "(user_id, title, goal_type, target_amount, current_amount, currency, deadline, completed) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, title, goal_type, target_amount,
+             round(initial_amount, 4), currency, deadline, completed)
         )
         conn.commit()
         return cursor.lastrowid
@@ -492,3 +496,84 @@ def get_statistics_filtered(
         by_category[r["category"]] = by_category.get(r["category"], 0) + r["total"]
 
     return {"income": income, "expense": expense, "by_category": by_category}
+
+
+# ──────────────── GOAL RECALCULATION ────────────────
+
+def recalculate_all_goals(user_id: int, conversion_rates: dict = None) -> List[Dict]:
+    """Recompute current_amount for every goal from scratch.
+
+    Called after deleting a transaction so goal progress stays accurate.
+    Sums all income transactions (converted to each goal's currency).
+    """
+    with get_connection() as conn:
+        goals = conn.execute(
+            "SELECT * FROM goals WHERE user_id = ? ORDER BY id",
+            (user_id,),
+        ).fetchall()
+
+        income_txns = conn.execute(
+            "SELECT amount, currency FROM transactions"
+            " WHERE user_id = ? AND type = 'income'",
+            (user_id,),
+        ).fetchall()
+
+        updated: List[Dict] = []
+        for goal in goals:
+            g = dict(goal)
+            goal_currency = g["currency"]
+            total = 0.0
+
+            for tx in income_txns:
+                amount      = tx["amount"]
+                tx_currency = tx["currency"]
+                if tx_currency == goal_currency:
+                    total += amount
+                elif conversion_rates:
+                    converted = convert_currency(amount, tx_currency,
+                                                 goal_currency, conversion_rates)
+                    total += converted
+
+            total     = round(total, 4)
+            completed = 1 if total >= g["target_amount"] else 0
+            conn.execute(
+                "UPDATE goals SET current_amount = ?, completed = ? WHERE id = ?",
+                (total, completed, g["id"]),
+            )
+            g["current_amount"] = total
+            g["completed"]      = completed
+            updated.append(g)
+
+        conn.commit()
+        return updated
+
+
+def calculate_initial_goal_amount(
+    user_id: int,
+    goal_currency: str,
+    conversion_rates: dict = None,
+) -> float:
+    """Return the total of all existing income transactions converted to goal_currency.
+
+    Used to pre-populate current_amount when a new goal is created, so the user
+    doesn't start from zero if they already have transactions.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT amount, currency FROM transactions"
+            " WHERE user_id = ? AND type = 'income'",
+            (user_id,),
+        ).fetchall()
+
+    total = 0.0
+    for row in rows:
+        amount      = row["amount"]
+        tx_currency = row["currency"]
+        if tx_currency == goal_currency:
+            total += amount
+        elif conversion_rates:
+            converted = convert_currency(amount, tx_currency,
+                                         goal_currency, conversion_rates)
+            total += converted
+
+    return round(total, 4)

@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
     S_SETTINGS_BASE_CURRENCY,
     # Stats custom date range
     S_STATS_CUSTOM_START, S_STATS_CUSTOM_END,
-) = range(16)
+    # Transaction delete flow
+    S_TRANS_SELECT_DELETE,
+) = range(17)
 
 # Currency keyboard rows
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -81,7 +83,8 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_add_income"), callback_data="trans_add_income"),
          InlineKeyboardButton(t(l, "btn_add_expense"), callback_data="trans_add_expense")],
         [InlineKeyboardButton(t(l, "btn_view_transactions"), callback_data="trans_view")],
-        [InlineKeyboardButton(t(l, "btn_clear_transactions"), callback_data="trans_clear")],
+        [InlineKeyboardButton(t(l, "btn_delete_transaction"), callback_data="trans_delete"),
+         InlineKeyboardButton(t(l, "btn_clear_transactions"), callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
     ])
 
@@ -444,18 +447,20 @@ async def _send_charts(
     if not txns:
         summary += "\n" + t(l, "stats_no_data_period")
 
-    # ── Send charts ──
+    # ── Send charts, track IDs so Back can delete them ──
+    chart_msg_ids: list = []
     sent_any = False
 
     # 1. Goals progress
     if goals:
         img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
         if img:
-            await context.bot.send_photo(
+            msg = await context.bot.send_photo(
                 chat_id=uid,
                 photo=BytesIO(img),
                 caption=t(l, "chart_goals_caption"),
             )
+            chart_msg_ids.append(msg.message_id)
             sent_any = True
 
     # 2. Expense pie
@@ -463,11 +468,12 @@ async def _send_charts(
     if by_cat:
         img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
         if img:
-            await context.bot.send_photo(
+            msg = await context.bot.send_photo(
                 chat_id=uid,
                 photo=BytesIO(img),
                 caption=t(l, "chart_pie_caption"),
             )
+            chart_msg_ids.append(msg.message_id)
             sent_any = True
 
     # 3. Income vs expenses bar
@@ -479,22 +485,42 @@ async def _send_charts(
             title=t(l, "chart_bar_title"),
         )
         if img:
-            await context.bot.send_photo(
+            msg = await context.bot.send_photo(
                 chat_id=uid,
                 photo=BytesIO(img),
                 caption=t(l, "chart_bar_caption"),
             )
+            chart_msg_ids.append(msg.message_id)
             sent_any = True
 
-    # Edit original message → summary + back button
+    # Store IDs so cb_back_stats can clean them up
+    context.user_data["stats_chart_msg_ids"] = chart_msg_ids
+
+    # Edit original message → summary + back button (back_stats clears photos)
     if not sent_any:
         summary += "\n\n" + t(l, "stats_no_charts")
 
     await query.edit_message_text(
         summary,
-        reply_markup=back_keyboard(uid),
+        reply_markup=back_keyboard(uid, "back_stats"),
         parse_mode=ParseMode.MARKDOWN,
     )
+
+
+async def cb_back_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete chart photos then return to main menu."""
+    query = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    chat_id  = query.message.chat_id
+
+    for msg_id in context.user_data.pop("stats_chart_msg_ids", []):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+
+    await send_main_menu(update, uid, edit=True)
 
 
 # ── callback: named period selected ──
@@ -589,18 +615,21 @@ async def stats_custom_got_end(update: Update, context: ContextTypes.DEFAULT_TYP
     summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency="")
 
     sent_any = False
+    chart_msg_ids: list = []
 
     if goals:
         img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
         if img:
-            await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_goals_caption"))
+            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_goals_caption"))
+            chart_msg_ids.append(pm.message_id)
             sent_any = True
 
     by_cat = stats.get("by_category", {})
     if by_cat:
         img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
         if img:
-            await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_pie_caption"))
+            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_pie_caption"))
+            chart_msg_ids.append(pm.message_id)
             sent_any = True
 
     if txns:
@@ -611,15 +640,19 @@ async def stats_custom_got_end(update: Update, context: ContextTypes.DEFAULT_TYP
             title=t(l, "chart_bar_title"),
         )
         if img:
-            await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_bar_caption"))
+            pm = await update.message.reply_photo(photo=BytesIO(img), caption=t(l, "chart_bar_caption"))
+            chart_msg_ids.append(pm.message_id)
             sent_any = True
 
     if not sent_any:
         summary += "\n\n" + t(l, "stats_no_charts")
 
+    # Store chart IDs so back_stats can clean them up
+    context.user_data["stats_chart_msg_ids"] = chart_msg_ids
+
     await update.message.reply_text(
         summary,
-        reply_markup=back_keyboard(uid),
+        reply_markup=back_keyboard(uid, "back_stats"),
         parse_mode=ParseMode.MARKDOWN,
     )
     # Delete the "Generating..." placeholder
@@ -669,6 +702,74 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         reply_markup=back_keyboard(uid, "menu_transactions"),
         parse_mode=ParseMode.MARKDOWN
     )
+
+
+# ─────────────────── DELETE INDIVIDUAL TRANSACTION ───────────────────
+
+def _trans_select_keyboard(txns: list, uid: int) -> InlineKeyboardMarkup:
+    """Build a keyboard where each row is one transaction + a delete button."""
+    l = lang(uid)
+    rows = []
+    for tx in txns:
+        emoji    = "📈" if tx["type"] == "income" else "📉"
+        date_str = tx["created_at"][:10] if tx["created_at"] else "?"
+        label    = f"{emoji} {date_str}  {tx['amount']:,.0f} {tx['currency']}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"tdel_{tx['id']}")])
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="menu_transactions")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def trans_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry: show list of transactions to delete."""
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+
+    txns = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_delete"),
+        reply_markup=_trans_select_keyboard(txns, uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_DELETE
+
+
+async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete chosen transaction and recalculate all goals."""
+    query = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    tx_id  = int(query.data.split("_")[1])
+
+    db.delete_transaction(tx_id)
+
+    # Recalculate all goals from scratch after deletion
+    await query.edit_message_text(t(l, "recalculating_goals"), parse_mode=ParseMode.MARKDOWN)
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    db.recalculate_all_goals(uid, conversion_rates)
+
+    await query.edit_message_text(
+        t(l, "transaction_deleted"),
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
 
 
 async def cb_clear_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1016,15 +1117,31 @@ async def goal_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return S_GOAL_DEADLINE
 
     ud = context.user_data
-    db.add_goal(uid, ud["goal_title"], ud["goal_type"],
-                ud["goal_amount"], ud["goal_currency"], deadline)
+
+    # Fetch rates to calculate initial progress from existing transactions
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    initial_amount = db.calculate_initial_goal_amount(uid, ud["goal_currency"], conversion_rates)
+
+    goal_id = db.add_goal(uid, ud["goal_title"], ud["goal_type"],
+                          ud["goal_amount"], ud["goal_currency"], deadline,
+                          initial_amount=initial_amount)
+
+    pct = min(100, round(initial_amount / ud["goal_amount"] * 100)) if ud["goal_amount"] else 0
 
     await update.message.reply_text(
         t(l, "goal_saved",
           title=ud["goal_title"],
           amount=f"{ud['goal_amount']:,.2f}",
           currency=ud["goal_currency"],
-          deadline=deadline or "—"),
+          deadline=deadline or "—",
+          initial=f"{initial_amount:,.2f}",
+          pct=pct),
         reply_markup=back_keyboard(uid, "menu_goals"),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -1185,6 +1302,19 @@ def build_application() -> Application:
 
     app = Application.builder().token(token).build()
 
+    # ── Delete individual transaction conversation ──
+    trans_delete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_delete_start, pattern="^trans_delete$")],
+        states={
+            S_TRANS_SELECT_DELETE: [CallbackQueryHandler(trans_select_delete, pattern="^tdel_")],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add income/expense conversation ──
     trans_conv = ConversationHandler(
         entry_points=[
@@ -1292,6 +1422,7 @@ def build_application() -> Application:
     # Register conversations (order matters — stats_custom_conv first!)
     for conv in [
         stats_custom_conv,
+        trans_delete_conv,
         trans_conv, goal_add_conv,
         goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
@@ -1312,6 +1443,9 @@ def build_application() -> Application:
                 "menu_stats|menu_settings|settings_language|settings_status_notifications|"
                 "trans_view|trans_clear|goal_view)$"
     ))
+
+    # Back from stats — deletes chart photos then goes to main menu
+    app.add_handler(CallbackQueryHandler(cb_back_stats, pattern="^back_stats$"))
     
     # Transaction clear confirmation
     app.add_handler(CallbackQueryHandler(cb_clear_transactions_confirm, pattern="^trans_clear_confirm$"))

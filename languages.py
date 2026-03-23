@@ -146,6 +146,15 @@ LANGUAGES = {
         "chart_pie_caption":   "🥧 *Expenses by Category*",
         "chart_bar_title":     "Income vs Expenses",
         "chart_bar_caption":   "📊 *Income vs Expenses*",
+
+        # Transaction delete
+        "btn_delete_transaction":        "🗑 Delete Transaction",
+        "choose_transaction_to_delete":  "🗑 *Choose a transaction to delete:*\n_(showing last 20)_",
+        "transaction_deleted":           "✅ Transaction deleted. Goal progress recalculated.",
+        "recalculating_goals":           "⏳ Deleting and recalculating goals…",
+
+        # Goal creation with initial amount
+        "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}\n\n📊 Starting progress: {initial} ({pct}%)",
     },
 
     "ru": {
@@ -295,6 +304,15 @@ LANGUAGES = {
         "chart_pie_caption":   "🥧 *Расходы по категориям*",
         "chart_bar_title":     "Доходы и расходы",
         "chart_bar_caption":   "📊 *Доходы и расходы*",
+
+        # Удаление транзакции
+        "btn_delete_transaction":        "🗑 Удалить транзакцию",
+        "choose_transaction_to_delete":  "🗑 *Выберите транзакцию для удаления:*\n_(последние 20)_",
+        "transaction_deleted":           "✅ Транзакция удалена. Прогресс целей пересчитан.",
+        "recalculating_goals":           "⏳ Удаление и пересчёт целей…",
+
+        # Создание цели с начальным балансом
+        "goal_saved": "✅ Цель создана!\n\n*{title}*\nЦель: {amount} {currency}\nДедлайн: {deadline}\n\n📊 Начальный прогресс: {initial} ({pct}%)",
     }
 }
 
