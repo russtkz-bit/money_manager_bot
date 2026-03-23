@@ -408,6 +408,7 @@ async def _send_charts(
     end_date: str,
     bar_period: str,
     period_label: str,
+    chart_types: set = None,
 ):
     l = lang(uid)
     query = update.callback_query
