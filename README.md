@@ -1,17 +1,16 @@
 # 💰 Money Manager Telegram Bot
 
-A fully-featured personal finance Telegram bot with AI-powered market analysis, real-time currency tracking, income/expense tracking, and financial goal management. Supports **English** and **Russian** languages.
+A fully-featured personal finance Telegram bot with real-time currency tracking, income/expense tracking, and financial goal management. Supports **English** and **Russian** languages.
 
 ---
 
-## ✨ Features
+## Features
 
 | Feature | Description |
 |---|---|
 | 💸 **Transactions** | Add income/expense with category, currency, and description |
 | 🎯 **Goals** | Set savings or loan repayment goals with deadlines |
 | 💱 **Live Currencies** | Real-time rates: fiat, crypto (BTC/ETH/SOL/TON…), gold & silver |
-| 🤖 **AI Assistant** | Market overview, personal advice & goal strategy (uses web search) |
 | 📊 **Statistics** | Balance, income/expense totals, breakdown by category |
 | 🌐 **Bilingual** | Full English 🇬🇧 and Russian 🇷🇺 support |
 | 💱 **Goal Currency Converter** | Convert goal amounts between any supported currency in real-time |
@@ -42,7 +41,6 @@ pip install -r requirements.txt
 ### 4. Get Your API Keys
 
 - **Telegram Bot Token** — from BotFather (step above)
-- **Anthropic API Key** — from [console.anthropic.com](https://console.anthropic.com) (for AI assistant)
 
 ### 5. Configure Environment
 
@@ -90,17 +88,6 @@ money_manager_bot/
 
 ---
 
-## 🤖 AI Assistant Capabilities
-
-The AI assistant uses **Anthropic Claude** with **real-time web search** to:
-
-- 📈 **Market Overview** — Latest crypto, gold, forex news & trends
-- 💡 **Personal Advice** — Recommendations based on your spending patterns
-- 🎯 **Goal Strategy** — How to achieve your financial goals faster
-- 💬 **Custom Questions** — Ask anything about finance or markets
-
----
-
 ## 🌐 Free APIs Used
 
 | Service | Purpose | API Key Required |
@@ -108,7 +95,6 @@ The AI assistant uses **Anthropic Claude** with **real-time web search** to:
 | [open.er-api.com](https://open.er-api.com) | Fiat exchange rates | No |
 | [CoinGecko](https://coingecko.com/api) | Crypto prices | No |
 | [metals.live](https://metals.live) | Gold & silver prices | No |
-| Anthropic Claude | AI + web search | Yes |
 
 ---
 
@@ -163,4 +149,4 @@ sudo systemctl status money-bot
 
 ## ⚠️ Disclaimer
 
-This bot is for personal finance tracking only. AI-generated market analysis is not professional financial advice. Always consult a qualified financial advisor before making investment decisions.
+This bot is for personal finance tracking only. The code is AI-generated.
