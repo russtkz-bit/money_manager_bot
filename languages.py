@@ -105,15 +105,6 @@ LANGUAGES = {
         "btn_lang_en": "🇬🇧 English",
         "btn_lang_ru": "🇷🇺 Русский",
 
-        # Bot Status Notifications
-        "btn_status_notifications": "🔔 Status Notifications",
-        "status_notifications_on": "✅ Status notifications are *ON*.\n\nYou will receive notifications when the bot goes offline and comes back online.",
-        "status_notifications_off": "🔕 Status notifications are *OFF*.\n\nYou will not receive bot status notifications.",
-        "status_notifications_enabled": "✅ Status notifications enabled.",
-        "status_notifications_disabled": "🔕 Status notifications disabled.",
-        "bot_online": "🟢 *Bot is Online!*\n\nMoney Manager Bot has just started. All systems operational.",
-        "bot_offline": "🔴 *Bot is Offline*\n\nSorry, Money Manager Bot is temporarily unavailable. We're working on it and will be back soon.",
-
         # ── Statistics / Charts ──
         "stats_choose_period": "📊 *Statistics*\n\nChoose a time period:",
         "stats_period_week":   "📅 This Week",
@@ -256,15 +247,6 @@ LANGUAGES = {
         "choose_language": "🌐 Выберите язык:",
         "btn_lang_en": "🇬🇧 English",
         "btn_lang_ru": "🇷🇺 Русский",
-
-        # Bot Status Notifications
-        "btn_status_notifications": "🔔 Уведомления о статусе",
-        "status_notifications_on": "✅ Уведомления о статусе *ВКЛЮЧЕНЫ*.\n\nВы будете получать уведомления, когда бот отключится и включится снова.",
-        "status_notifications_off": "🔕 Уведомления о статусе *ВЫКЛЮЧЕНЫ*.\n\nВы не будете получать уведомления о статусе бота.",
-        "status_notifications_enabled": "✅ Уведомления о статусе включены.",
-        "status_notifications_disabled": "🔕 Уведомления о статусе отключены.",
-        "bot_online": "🟢 *Бот включен!*\n\nMoney Manager Bot только что запущен. Все системы работают.",
-        "bot_offline": "🔴 *Бот выключен*\n\nИзвините, Money Manager Bot временно недоступен. Мы работаем над исправлением и скоро вернёмся.",
 
         # ── Статистика / Графики ──
         "stats_choose_period": "📊 *Статистика*\n\nВыберите период:",
