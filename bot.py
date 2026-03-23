@@ -1457,33 +1457,50 @@ def build_application() -> Application:
     return app
 
 
+# Minimum uptime in seconds before an offline notification is sent.
+# Prevents a false offline alert when startup fails due to 409 Conflict.
+_MIN_UPTIME_FOR_OFFLINE_NOTIFY = 15
+
+
 async def on_bot_start(app: Application) -> None:
     """Called when bot starts - set commands and notify users."""
+    # Record startup time so on_bot_stop can check actual uptime
+    app.bot_data["startup_time"] = datetime.now()
+
     await app.bot.set_my_commands([
         BotCommand("start", "Start / Language select"),
         BotCommand("menu", "Open main menu"),
         BotCommand("cancel", "Cancel current action"),
     ])
-    
-    # Send "bot online" notification to all users who want it
+
     notified = await broadcast_status_notification(app, "online")
     db.log_bot_status("online", notified)
-    logger.info(f"✅ Bot online notifications sent to {notified} users")
+    logger.info(f"\u2705 Bot online notifications sent to {notified} users")
 
 
 async def on_bot_stop(app: Application) -> None:
-    """Called on post_stop — HTTP client is still alive here.
-    
-    Lifecycle order in python-telegram-bot:
-        post_init → (polling) → post_stop → post_shutdown
-    post_shutdown is called AFTER the HTTP client is closed, so bot.send_message
-    will raise 'HTTPXRequest is not initialized'. post_stop fires while the
-    network is still up, making it the correct hook for outbound notifications.
+    """Called on post_stop - HTTP client is still alive here.
+
+    Guard: if the bot stopped within _MIN_UPTIME_FOR_OFFLINE_NOTIFY seconds
+    of starting (e.g. 409 Conflict because another instance is running),
+    skip the offline notification. The user already received an online message
+    from the surviving instance; sending offline right after would be confusing.
     """
+    startup_time = app.bot_data.get("startup_time")
+    if startup_time is not None:
+        uptime = (datetime.now() - startup_time).total_seconds()
+        if uptime < _MIN_UPTIME_FOR_OFFLINE_NOTIFY:
+            logger.info(
+                f"Skipping offline notification - uptime only {uptime:.1f}s "
+                f"(threshold {_MIN_UPTIME_FOR_OFFLINE_NOTIFY}s). "
+                f"Likely a startup conflict, not a real shutdown."
+            )
+            return
+
     try:
         notified = await broadcast_status_notification(app, "offline")
         db.log_bot_status("offline", notified)
-        logger.info(f"🔴 Bot offline notifications sent to {notified} users")
+        logger.info(f"\U0001f534 Bot offline notifications sent to {notified} users")
     except Exception as e:
         logger.warning(f"Could not send offline notifications: {e}")
 
@@ -1492,11 +1509,11 @@ if __name__ == "__main__":
     db.init_db()
     app = build_application()
 
-    # post_init  → runs after the HTTP client is ready (good for "bot online" msg)
-    # post_stop  → runs before the HTTP client is torn down (good for "bot offline" msg)
-    # post_shutdown would be too late — the HTTP client is already closed there
+    # post_init  -> runs after the HTTP client is ready (good for "bot online" msg)
+    # post_stop  -> runs before the HTTP client is torn down (good for "bot offline" msg)
+    # post_shutdown would be too late - the HTTP client is already closed there
     app.post_init = on_bot_start
     app.post_stop = on_bot_stop
 
-    logger.info("✅ Money Manager Bot started!")
+    logger.info("\u2705 Money Manager Bot started!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
