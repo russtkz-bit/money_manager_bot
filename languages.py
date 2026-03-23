@@ -1,7 +1,7 @@
 LANGUAGES = {
     "en": {
         # General
-        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and get AI-powered market insights.\n\nPlease choose your language / Выберите язык:",
+        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, and monitor currencies. \n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
@@ -159,7 +159,7 @@ LANGUAGES = {
 
     "ru": {
         # General
-        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и получать советы от ИИ.\n\nПожалуйста, выберите язык / Please choose your language:",
+        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, и мониторить курсы валют.\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
