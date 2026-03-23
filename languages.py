@@ -1,7 +1,7 @@
 LANGUAGES = {
     "en": {
         # General
-        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, and monitor currencies. \n\nPlease choose your language / Выберите язык:",
+        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and get AI-powered market insights.\n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
@@ -134,6 +134,9 @@ LANGUAGES = {
         "stats_period_header": "📊 *Statistics: {period}*\n\n",
         "stats_no_data_period": "No transactions in this period.",
         "stats_no_charts":     "No data to display charts.",
+        "stats_choose_charts":     "📊 *Choose charts to display:*\n\nToggle on/off, then tap Generate.",
+        "stats_generate":          "▶️ Generate",
+        "stats_no_chart_selected": "Select at least one chart type.",
         "stats_enter_start_date": "📅 Enter *start date* (YYYY-MM-DD):",
         "stats_enter_end_date":   "📅 Enter *end date* (YYYY-MM-DD):",
         "stats_invalid_date":     "⚠️ Invalid date. Use format YYYY-MM-DD (e.g. 2024-01-15).",
@@ -159,7 +162,7 @@ LANGUAGES = {
 
     "ru": {
         # General
-        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, и мониторить курсы валют. \n\nЕсли вам интересны обновления, то можете подписаться на канал @lookatpatch. \n\nПожалуйста, выберите язык / Please choose your language:",
+        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и получать советы от ИИ.\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
@@ -292,6 +295,9 @@ LANGUAGES = {
         "stats_period_header": "📊 *Статистика: {period}*\n\n",
         "stats_no_data_period": "Транзакций за этот период нет.",
         "stats_no_charts":     "Данных для графиков нет.",
+        "stats_choose_charts":     "📊 *Выберите графики:*\n\nВключите/выключите нужные и нажмите Генерировать.",
+        "stats_generate":          "▶️ Генерировать",
+        "stats_no_chart_selected": "Выберите хотя бы один тип графика.",
         "stats_enter_start_date": "📅 Введите *начальную дату* (ГГГГ-ММ-ДД):",
         "stats_enter_end_date":   "📅 Введите *конечную дату* (ГГГГ-ММ-ДД):",
         "stats_invalid_date":     "⚠️ Неверный формат даты. Используйте ГГГГ-ММ-ДД (например, 2024-01-15).",
