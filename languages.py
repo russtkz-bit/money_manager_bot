@@ -19,14 +19,37 @@ LANGUAGES = {
         "btn_currencies": "💱 Currencies",
         "btn_statistics": "📊 Statistics",
         "btn_settings": "⚙️ Settings",
+        "btn_accounts": "🏦 Accounts",
         "btn_add_income": "➕ Add Income",
         "btn_add_expense": "➖ Add Expense",
         "btn_view_transactions": "📋 View Transactions",
         "btn_clear_transactions": "🗑️ Clear All",
+        "btn_delete_transaction": "🗑 Delete Transaction",
         "btn_add_goal": "🎯 Add Goal",
         "btn_view_goals": "📋 View Goals",
         "btn_delete_goal": "🗑️ Delete Goal",
         "btn_convert_goal": "💱 Convert Goal Currency",
+
+        # Accounts
+        "accounts_menu_header": "🏦 *Accounts*\n\nManage your bank cards, crypto wallets, and cash.",
+        "btn_add_account": "➕ Add Account",
+        "btn_view_accounts": "📋 View Accounts",
+        "btn_delete_account": "🗑️ Delete Account",
+        "choose_account_type": "🏦 Choose account type:",
+        "account_type_bank": "🏦 Bank / Card",
+        "account_type_crypto": "₿ Crypto Exchange",
+        "account_type_cash": "💵 Cash",
+        "enter_account_name": "📝 Enter account name (e.g. *Kaspi*, *Binance*, *Wallet*):",
+        "enter_account_currency": "💱 Choose currency for this account:",
+        "enter_account_balance": "💰 Enter your *current balance* on this account (e.g. 150000.00):",
+        "account_saved": "✅ Account added!\n\n*{name}* ({type})\nBalance: {balance} {currency}",
+        "no_accounts": "📭 No accounts yet.\n\n⚠️ You need to add at least one account before creating transactions.",
+        "no_accounts_for_transaction": "⚠️ *You have no accounts yet!*\n\nPlease add an account first (bank card, crypto exchange or cash) — then you can record income and expenses.",
+        "accounts_header": "🏦 *Your Accounts:*\n\n",
+        "account_line": "{emoji} *{name}* ({type})\n   Balance: `{balance:.2f} {currency}`\n\n",
+        "choose_account_to_delete": "Choose an account to delete:\n\n⚠️ All transactions linked to it will be unlinked.",
+        "account_deleted": "🗑️ Account deleted.",
+        "choose_account_for_transaction": "🏦 Choose account for this transaction:",
 
         # Transactions
         "choose_transaction_type": "Choose transaction type:",
@@ -34,14 +57,17 @@ LANGUAGES = {
         "enter_currency": "💱 Choose currency:",
         "enter_category": "🏷️ Choose a category:",
         "enter_description": "📝 Enter a short description (or /skip):",
-        "transaction_saved": "✅ Transaction saved!\n\n*Type:* {type}\n*Amount:* {amount} {currency}\n*Category:* {category}\n*Description:* {description}",
+        "transaction_saved": "✅ Transaction saved!\n\n*Type:* {type}\n*Account:* {account}\n*Amount:* {amount} {currency}\n*Category:* {category}\n*Description:* {description}",
         "income": "Income",
         "expense": "Expense",
         "no_transactions": "📭 No transactions yet.",
         "confirm_clear_transactions": "⚠️ *Are you sure?*\n\nThis will delete ALL your transactions. This action cannot be undone!",
         "transactions_cleared": "✅ All transactions cleared!\n\nDeleted: {count} transaction(s)",
         "transactions_header": "📋 *Recent Transactions (last 20):*\n\n",
-        "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] _{description}_\n",
+        "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] 🏦{account} _{description}_\n",
+        "choose_transaction_to_delete": "🗑 *Choose a transaction to delete:*\n_(showing last 20)_",
+        "transaction_deleted": "✅ Transaction deleted. Goal progress recalculated.",
+        "recalculating_goals": "⏳ Deleting and recalculating goals…",
 
         # Categories
         "cat_food": "🍔 Food",
@@ -64,12 +90,12 @@ LANGUAGES = {
         "enter_goal_amount": "💵 Enter target amount:",
         "enter_goal_currency": "💱 Choose currency for this goal:",
         "enter_goal_deadline": "📅 Enter deadline (YYYY-MM-DD) or /skip:",
-        "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}",
+        "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}\n\n📊 Starting progress: {initial} ({pct}%)",
         "no_goals": "📭 No goals set yet.",
         "goals_header": "🎯 *Your Goals:*\n\n",
         "goal_line": "{n}. *{title}* ({type})\n   Progress: {current}/{target} {currency} ({pct}%)\n   Deadline: {deadline}\n\n",
         "goal_completed": "🎉 *Congratulations! Goal completed!*",
-        "goal_progress_updated": "Goal progress updated from transaction",
+        "goal_progress_updated": "Goal progress updated",
         "choose_goal_to_delete": "Choose a goal to delete:",
         "goal_deleted": "🗑️ Goal deleted.",
         "choose_goal_to_convert": "Choose a goal to convert currency:",
@@ -83,7 +109,6 @@ LANGUAGES = {
         "metals_rates": "🥇 *Metals (per troy oz):*\n{rates}\n",
         "fetching_rates": "⏳ Fetching live rates...",
         "rates_error": "⚠️ Could not fetch some rates. Please try again later.",
-
 
         # Statistics
         "stats_header": "📊 *Your Financial Statistics*\n\n",
@@ -102,10 +127,8 @@ LANGUAGES = {
 
         # Languages
         "choose_language": "🌐 Choose language:",
-        "btn_lang_en": "🇬🇧 English",
-        "btn_lang_ru": "🇷🇺 Русский",
 
-        # ── Statistics / Charts ──
+        # Statistics / Charts
         "stats_choose_period": "📊 *Statistics*\n\nChoose a time period:",
         "stats_period_week":   "📅 This Week",
         "stats_period_month":  "🗓 This Month",
@@ -131,15 +154,6 @@ LANGUAGES = {
         "chart_pie_caption":   "🥧 *Expenses by Category*",
         "chart_bar_title":     "Income vs Expenses",
         "chart_bar_caption":   "📊 *Income vs Expenses*",
-
-        # Transaction delete
-        "btn_delete_transaction":        "🗑 Delete Transaction",
-        "choose_transaction_to_delete":  "🗑 *Choose a transaction to delete:*\n_(showing last 20)_",
-        "transaction_deleted":           "✅ Transaction deleted. Goal progress recalculated.",
-        "recalculating_goals":           "⏳ Deleting and recalculating goals…",
-
-        # Goal creation with initial amount
-        "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}\n\n📊 Starting progress: {initial} ({pct}%)",
     },
 
     "ru": {
@@ -162,14 +176,37 @@ LANGUAGES = {
         "btn_currencies": "💱 Валюты",
         "btn_statistics": "📊 Статистика",
         "btn_settings": "⚙️ Настройки",
+        "btn_accounts": "🏦 Счета",
         "btn_add_income": "➕ Добавить доход",
         "btn_add_expense": "➖ Добавить расход",
         "btn_view_transactions": "📋 История транзакций",
+        "btn_clear_transactions": "🗑️ Удалить все",
+        "btn_delete_transaction": "🗑 Удалить транзакцию",
         "btn_add_goal": "🎯 Добавить цель",
         "btn_view_goals": "📋 Мои цели",
-        "btn_update_goal": "💰 Добавить прогресс",
         "btn_delete_goal": "🗑️ Удалить цель",
         "btn_convert_goal": "💱 Конвертировать валюту цели",
+
+        # Accounts
+        "accounts_menu_header": "🏦 *Счета*\n\nУправляйте банковскими картами, криптокошельками и наличными.",
+        "btn_add_account": "➕ Добавить счёт",
+        "btn_view_accounts": "📋 Мои счета",
+        "btn_delete_account": "🗑️ Удалить счёт",
+        "choose_account_type": "🏦 Выберите тип счёта:",
+        "account_type_bank": "🏦 Банк / Карта",
+        "account_type_crypto": "₿ Криптобиржа",
+        "account_type_cash": "💵 Наличные",
+        "enter_account_name": "📝 Введите название счёта (например, *Kaspi*, *Binance*, *Кошелёк*):",
+        "enter_account_currency": "💱 Выберите валюту счёта:",
+        "enter_account_balance": "💰 Введите ваш *текущий баланс* на этом счёте (например, 150000.00):",
+        "account_saved": "✅ Счёт добавлен!\n\n*{name}* ({type})\nБаланс: {balance} {currency}",
+        "no_accounts": "📭 Счетов пока нет.\n\n⚠️ Добавьте хотя бы один счёт, прежде чем создавать транзакции.",
+        "no_accounts_for_transaction": "⚠️ *У вас пока нет счетов!*\n\nСначала добавьте счёт (банковская карта, криптобиржа или наличные) — только после этого можно добавлять доходы и расходы.",
+        "accounts_header": "🏦 *Ваши счета:*\n\n",
+        "account_line": "{emoji} *{name}* ({type})\n   Баланс: `{balance:.2f} {currency}`\n\n",
+        "choose_account_to_delete": "Выберите счёт для удаления:\n\n⚠️ Все транзакции, привязанные к нему, будут отвязаны.",
+        "account_deleted": "🗑️ Счёт удалён.",
+        "choose_account_for_transaction": "🏦 Выберите счёт для этой транзакции:",
 
         # Transactions
         "choose_transaction_type": "Выберите тип транзакции:",
@@ -177,14 +214,17 @@ LANGUAGES = {
         "enter_currency": "💱 Выберите валюту:",
         "enter_category": "🏷️ Выберите категорию:",
         "enter_description": "📝 Введите краткое описание (или /skip):",
-        "transaction_saved": "✅ Транзакция сохранена!\n\n*Тип:* {type}\n*Сумма:* {amount} {currency}\n*Категория:* {category}\n*Описание:* {description}",
+        "transaction_saved": "✅ Транзакция сохранена!\n\n*Тип:* {type}\n*Счёт:* {account}\n*Сумма:* {amount} {currency}\n*Категория:* {category}\n*Описание:* {description}",
         "income": "Доход",
         "expense": "Расход",
         "no_transactions": "📭 Транзакций пока нет.",
         "confirm_clear_transactions": "⚠️ *Вы уверены?*\n\nЭто удалит ВСЕ ваши транзакции. Это действие невозможно отменить!",
         "transactions_cleared": "✅ Все транзакции удалены!\n\nУдалено: {count} транзакция(й)",
         "transactions_header": "📋 *Последние транзакции (до 20):*\n\n",
-        "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] _{description}_\n",
+        "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] 🏦{account} _{description}_\n",
+        "choose_transaction_to_delete": "🗑 *Выберите транзакцию для удаления:*\n_(последние 20)_",
+        "transaction_deleted": "✅ Транзакция удалена. Прогресс целей пересчитан.",
+        "recalculating_goals": "⏳ Удаление и пересчёт целей…",
 
         # Categories
         "cat_food": "🍔 Еда",
@@ -207,12 +247,12 @@ LANGUAGES = {
         "enter_goal_amount": "💵 Введите целевую сумму:",
         "enter_goal_currency": "💱 Выберите валюту для этой цели:",
         "enter_goal_deadline": "📅 Введите дедлайн (ГГГГ-ММ-ДД) или /skip:",
-        "goal_saved": "✅ Цель создана!\n\n*{title}*\nЦель: {amount} {currency}\nДедлайн: {deadline}",
+        "goal_saved": "✅ Цель создана!\n\n*{title}*\nЦель: {amount} {currency}\nДедлайн: {deadline}\n\n📊 Начальный прогресс: {initial} ({pct}%)",
         "no_goals": "📭 Целей пока нет.",
         "goals_header": "🎯 *Ваши цели:*\n\n",
         "goal_line": "{n}. *{title}* ({type})\n   Прогресс: {current}/{target} {currency} ({pct}%)\n   Дедлайн: {deadline}\n\n",
         "goal_completed": "🎉 *Поздравляем! Цель достигнута!*",
-        "goal_progress_updated": "Прогресс цели обновлён из транзакции",
+        "goal_progress_updated": "Прогресс целей обновлён",
         "choose_goal_to_delete": "Выберите цель для удаления:",
         "goal_deleted": "🗑️ Цель удалена.",
         "choose_goal_to_convert": "Выберите цель для конвертации валюты:",
@@ -226,7 +266,6 @@ LANGUAGES = {
         "metals_rates": "🥇 *Металлы (за тройскую унцию):*\n{rates}\n",
         "fetching_rates": "⏳ Получение актуальных курсов...",
         "rates_error": "⚠️ Не удалось получить некоторые курсы. Попробуйте позже.",
-
 
         # Statistics
         "stats_header": "📊 *Ваша финансовая статистика*\n\n",
@@ -245,10 +284,8 @@ LANGUAGES = {
 
         # Languages
         "choose_language": "🌐 Выберите язык:",
-        "btn_lang_en": "🇬🇧 English",
-        "btn_lang_ru": "🇷🇺 Русский",
 
-        # ── Статистика / Графики ──
+        # Статистика / Графики
         "stats_choose_period": "📊 *Статистика*\n\nВыберите период:",
         "stats_period_week":   "📅 Эта неделя",
         "stats_period_month":  "🗓 Этот месяц",
@@ -274,15 +311,6 @@ LANGUAGES = {
         "chart_pie_caption":   "🥧 *Расходы по категориям*",
         "chart_bar_title":     "Доходы и расходы",
         "chart_bar_caption":   "📊 *Доходы и расходы*",
-
-        # Удаление транзакции
-        "btn_delete_transaction":        "🗑 Удалить транзакцию",
-        "choose_transaction_to_delete":  "🗑 *Выберите транзакцию для удаления:*\n_(последние 20)_",
-        "transaction_deleted":           "✅ Транзакция удалена. Прогресс целей пересчитан.",
-        "recalculating_goals":           "⏳ Удаление и пересчёт целей…",
-
-        # Создание цели с начальным балансом
-        "goal_saved": "✅ Цель создана!\n\n*{title}*\nЦель: {amount} {currency}\nДедлайн: {deadline}\n\n📊 Начальный прогресс: {initial} ({pct}%)",
     }
 }
 
