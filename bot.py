@@ -1,18 +1,17 @@
 """
 Money Manager Telegram Bot
-Tracks income/expenses, goals, currencies, and provides financial statistics.
+Tracks income/expenses via accounts, manages goals, currencies, and financial statistics.
 """
 
 import os
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+from io import BytesIO
 
 from dotenv import load_dotenv
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ConversationHandler, filters, ContextTypes
@@ -23,10 +22,9 @@ import database as db
 import currencies as cur
 import charts as ch
 from languages import t
-from io import BytesIO
-from datetime import datetime, timedelta
 
 load_dotenv()
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -38,26 +36,37 @@ logger = logging.getLogger(__name__)
     # Transaction flow
     S_TRANS_TYPE, S_TRANS_AMOUNT, S_TRANS_CURRENCY,
     S_TRANS_CATEGORY, S_TRANS_DESC,
+    S_TRANS_ACCOUNT,          # new: select account before entering amount
+
     # Goal flow
     S_GOAL_TYPE, S_GOAL_TITLE, S_GOAL_AMOUNT,
     S_GOAL_CURRENCY, S_GOAL_DEADLINE,
-    # Goal delete flow
+
+    # Goal delete / convert
     S_GOAL_SELECT_DELETE,
-    # Goal convert flow
     S_GOAL_SELECT_CONVERT, S_GOAL_NEW_CURRENCY,
+
     # Settings
     S_SETTINGS_BASE_CURRENCY,
+
     # Stats custom date range
     S_STATS_CUSTOM_START, S_STATS_CUSTOM_END,
-    # Transaction delete flow
-    S_TRANS_SELECT_DELETE,
-) = range(17)
 
-# Currency keyboard rows
+    # Transaction delete
+    S_TRANS_SELECT_DELETE,
+
+    # Account flow
+    S_ACCOUNT_TYPE, S_ACCOUNT_NAME, S_ACCOUNT_CURRENCY, S_ACCOUNT_BALANCE,
+    S_ACCOUNT_SELECT_DELETE,
+) = range(23)
+
+# Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
 CURRENCY_ROW_2 = ["GBP", "AED", "TRY", "CNY"]
 CURRENCY_ROW_3 = ["BTC", "ETH", "SOL", "TON"]
 CURRENCY_ROW_4 = ["BNB", "XRP", "XAU", "XAG"]
+
+ACCOUNT_TYPE_EMOJI = {"bank": "🏦", "crypto": "₿", "cash": "💵"}
 
 
 def lang(uid: int) -> str:
@@ -70,33 +79,44 @@ def main_menu_keyboard(uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(l, "btn_transactions"), callback_data="menu_transactions"),
-         InlineKeyboardButton(t(l, "btn_goals"), callback_data="menu_goals")],
-        [InlineKeyboardButton(t(l, "btn_currencies"), callback_data="menu_currencies"),
-         InlineKeyboardButton(t(l, "btn_statistics"), callback_data="menu_stats")],
-        [InlineKeyboardButton(t(l, "btn_settings"), callback_data="menu_settings")],
+         InlineKeyboardButton(t(l, "btn_goals"),        callback_data="menu_goals")],
+        [InlineKeyboardButton(t(l, "btn_accounts"),     callback_data="menu_accounts"),
+         InlineKeyboardButton(t(l, "btn_currencies"),   callback_data="menu_currencies")],
+        [InlineKeyboardButton(t(l, "btn_statistics"),   callback_data="menu_stats"),
+         InlineKeyboardButton(t(l, "btn_settings"),     callback_data="menu_settings")],
     ])
 
 
 def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(l, "btn_add_income"), callback_data="trans_add_income"),
-         InlineKeyboardButton(t(l, "btn_add_expense"), callback_data="trans_add_expense")],
-        [InlineKeyboardButton(t(l, "btn_view_transactions"), callback_data="trans_view")],
-        [InlineKeyboardButton(t(l, "btn_delete_transaction"), callback_data="trans_delete"),
-         InlineKeyboardButton(t(l, "btn_clear_transactions"), callback_data="trans_clear")],
-        [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
+        [InlineKeyboardButton(t(l, "btn_add_income"),          callback_data="trans_add_income"),
+         InlineKeyboardButton(t(l, "btn_add_expense"),         callback_data="trans_add_expense")],
+        [InlineKeyboardButton(t(l, "btn_view_transactions"),   callback_data="trans_view")],
+        [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
+         InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
+        [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
+    ])
+
+
+def accounts_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "btn_add_account"),    callback_data="account_add")],
+        [InlineKeyboardButton(t(l, "btn_view_accounts"),  callback_data="account_view")],
+        [InlineKeyboardButton(t(l, "btn_delete_account"), callback_data="account_delete")],
+        [InlineKeyboardButton(t(l, "back"),               callback_data="back_main")],
     ])
 
 
 def goals_keyboard(uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(l, "btn_add_goal"), callback_data="goal_add")],
-        [InlineKeyboardButton(t(l, "btn_view_goals"), callback_data="goal_view")],
+        [InlineKeyboardButton(t(l, "btn_add_goal"),    callback_data="goal_add")],
+        [InlineKeyboardButton(t(l, "btn_view_goals"),  callback_data="goal_view")],
         [InlineKeyboardButton(t(l, "btn_convert_goal"), callback_data="goal_convert"),
          InlineKeyboardButton(t(l, "btn_delete_goal"), callback_data="goal_delete")],
-        [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
+        [InlineKeyboardButton(t(l, "back"),            callback_data="back_main")],
     ])
 
 
@@ -131,13 +151,32 @@ def category_keyboard(t_type: str, uid: int) -> InlineKeyboardMarkup:
 def goal_type_keyboard(uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(l, "goal_type_save"), callback_data="gtype_save"),
+        [InlineKeyboardButton(t(l, "goal_type_save"),  callback_data="gtype_save"),
          InlineKeyboardButton(t(l, "goal_type_repay"), callback_data="gtype_repay")],
-        [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")],
+        [InlineKeyboardButton(t(l, "cancel"),          callback_data="conv_cancel")],
     ])
 
 
+def account_type_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "account_type_bank"),   callback_data="atype_bank"),
+         InlineKeyboardButton(t(l, "account_type_crypto"), callback_data="atype_crypto")],
+        [InlineKeyboardButton(t(l, "account_type_cash"),   callback_data="atype_cash")],
+        [InlineKeyboardButton(t(l, "cancel"),              callback_data="conv_cancel")],
+    ])
 
+
+def accounts_select_keyboard(accounts: list, callback_prefix: str, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for acc in accounts:
+        emoji = ACCOUNT_TYPE_EMOJI.get(acc["account_type"], "🏦")
+        bal   = acc.get("computed_balance", acc["initial_balance"])
+        label = f"{emoji} {acc['name']} — {bal:,.2f} {acc['currency']}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"{callback_prefix}_{acc['id']}")])
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    return InlineKeyboardMarkup(rows)
 
 
 def settings_keyboard(uid: int) -> InlineKeyboardMarkup:
@@ -145,14 +184,14 @@ def settings_keyboard(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(l, "btn_change_language"), callback_data="settings_language")],
         [InlineKeyboardButton(t(l, "btn_change_currency"), callback_data="settings_base_currency")],
-        [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
+        [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
     ])
 
 
 def language_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🇬🇧 English", callback_data="setlang_en"),
-         InlineKeyboardButton("🇷🇺 Русский", callback_data="setlang_ru")],
+         InlineKeyboardButton("🇷🇺 Русский",  callback_data="setlang_ru")],
     ])
 
 
@@ -169,7 +208,7 @@ def stats_period_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "stats_period_6m"),     callback_data="stats_p_6m"),
          InlineKeyboardButton(t(l, "stats_period_year"),   callback_data="stats_p_year")],
         [InlineKeyboardButton(t(l, "stats_period_custom"), callback_data="stats_p_custom")],
-        [InlineKeyboardButton(t(l, "back"), callback_data="back_main")],
+        [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
     ])
 
 
@@ -177,7 +216,7 @@ def stats_chart_type_keyboard(uid: int, selected: set) -> InlineKeyboardMarkup:
     l = lang(uid)
 
     def btn(label_key: str, key: str) -> InlineKeyboardButton:
-        mark = "\u2705" if key in selected else "\u2b1c"
+        mark = "✅" if key in selected else "⬜"
         return InlineKeyboardButton(
             f"{mark} {t(l, label_key)}",
             callback_data=f"schrt_toggle_{key}",
@@ -187,8 +226,8 @@ def stats_chart_type_keyboard(uid: int, selected: set) -> InlineKeyboardMarkup:
         [btn("chart_goals_caption", "goals"),
          btn("chart_pie_caption",   "pie")],
         [btn("chart_bar_caption",   "bar")],
-        [InlineKeyboardButton(t(l, "stats_generate"), callback_data="schrt_generate")],
-        [InlineKeyboardButton(t(l, "back"), callback_data="back_stats")],
+        [InlineKeyboardButton(t(l, "stats_generate"),  callback_data="schrt_generate")],
+        [InlineKeyboardButton(t(l, "back"),            callback_data="back_stats")],
     ])
 
 
@@ -196,19 +235,31 @@ def goals_select_keyboard(goals: list, callback_prefix: str, uid: int) -> Inline
     l = lang(uid)
     rows = []
     for g in goals:
-        pct = min(100, round(g["current_amount"] / g["target_amount"] * 100)) if g["target_amount"] else 0
+        pct   = min(100, round(g["current_amount"] / g["target_amount"] * 100)) if g["target_amount"] else 0
         label = f"{g['title']} ({pct}%)"
         rows.append([InlineKeyboardButton(label, callback_data=f"{callback_prefix}_{g['id']}")])
     rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
     return InlineKeyboardMarkup(rows)
 
 
+def _trans_select_keyboard(txns: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for tx in txns:
+        emoji    = "📈" if tx["type"] == "income" else "📉"
+        date_str = tx["created_at"][:10] if tx["created_at"] else "?"
+        label    = f"{emoji} {date_str} {tx['amount']:,.0f} {tx['currency']}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"tdel_{tx['id']}")])
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="menu_transactions")])
+    return InlineKeyboardMarkup(rows)
+
+
 # ─────────────────── HELPERS ───────────────────
 
 async def send_main_menu(update: Update, uid: int, edit: bool = False):
-    l = lang(uid)
+    l   = lang(uid)
     text = t(l, "main_menu")
-    kb = main_menu_keyboard(uid)
+    kb  = main_menu_keyboard(uid)
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     else:
@@ -221,21 +272,25 @@ def format_goals_text(goals: list, l: str) -> str:
         return t(l, "no_goals")
     lines = t(l, "goals_header")
     type_labels = {
-        "save": t(l, "goal_type_save"),
+        "save":  t(l, "goal_type_save"),
         "repay": t(l, "goal_type_repay"),
     }
     for i, g in enumerate(goals, 1):
-        pct = min(100, round(g["current_amount"] / g["target_amount"] * 100)) if g["target_amount"] else 0
+        pct      = min(100, round(g["current_amount"] / g["target_amount"] * 100)) if g["target_amount"] else 0
         deadline = g["deadline"] or "—"
-        lines += t(l, "goal_line",
-                   n=i, title=g["title"],
-                   type=type_labels.get(g["goal_type"], g["goal_type"]),
-                   current=f"{g['current_amount']:.2f}",
-                   target=f"{g['target_amount']:.2f}",
-                   currency=g["currency"],
-                   pct=pct,
-                   deadline=deadline)
+        lines   += t(l, "goal_line",
+                     n=i, title=g["title"],
+                     type=type_labels.get(g["goal_type"], g["goal_type"]),
+                     current=f"{g['current_amount']:,.2f}",
+                     target=f"{g['target_amount']:,.2f}",
+                     currency=g["currency"],
+                     pct=pct, deadline=deadline)
     return lines
+
+
+def _account_type_label(account_type: str, l: str) -> str:
+    key_map = {"bank": "account_type_bank", "crypto": "account_type_crypto", "cash": "account_type_cash"}
+    return t(l, key_map.get(account_type, "account_type_bank"))
 
 
 # ─────────────────── START / WELCOME ───────────────────
@@ -243,14 +298,13 @@ def format_goals_text(goals: list, l: str) -> str:
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     db.ensure_user(uid)
-    # Auto-detect language from Telegram client; default to English.
-    tg_lang = (update.effective_user.language_code or "en").lower()
+    tg_lang      = (update.effective_user.language_code or "en").lower()
     initial_lang = "ru" if tg_lang.startswith("ru") else "en"
     db.set_user_language(uid, initial_lang)
     text = t(initial_lang, "welcome")
-    kb = InlineKeyboardMarkup([
+    kb   = InlineKeyboardMarkup([
         [InlineKeyboardButton("🇬🇧 English", callback_data="setlang_en"),
-         InlineKeyboardButton("🇷🇺 Русский", callback_data="setlang_ru")],
+         InlineKeyboardButton("🇷🇺 Русский",  callback_data="setlang_ru")],
     ])
     await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
@@ -258,11 +312,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cb_set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    chosen = query.data.split("_")[1]  # en or ru
+    uid    = query.from_user.id
+    chosen = query.data.split("_")[1]
     db.set_user_language(uid, chosen)
-    l = chosen
-    await query.edit_message_text(t(l, "language_set"), parse_mode=ParseMode.MARKDOWN)
+    await query.edit_message_text(t(chosen, "language_set"), parse_mode=ParseMode.MARKDOWN)
     await asyncio.sleep(0.5)
     await send_main_menu(update, uid, edit=True)
 
@@ -279,7 +332,7 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    l = lang(uid)
+    l   = lang(uid)
 
     if query.data == "back_main":
         await send_main_menu(update, uid, edit=True)
@@ -288,6 +341,12 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             t(l, "btn_transactions"),
             reply_markup=transactions_keyboard(uid),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    elif query.data == "menu_accounts":
+        await query.edit_message_text(
+            t(l, "accounts_menu_header"),
+            reply_markup=accounts_keyboard(uid),
             parse_mode=ParseMode.MARKDOWN
         )
     elif query.data == "menu_goals":
@@ -316,61 +375,49 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     elif query.data == "trans_view":
         await handle_view_transactions(update, context)
-    
+
     elif query.data == "trans_clear":
         await cb_clear_transactions(update, context)
 
     elif query.data == "goal_view":
         await handle_view_goals(update, context)
 
+    elif query.data == "account_view":
+        await handle_view_accounts(update, context)
+
 
 # ─────────────────── CURRENCIES ───────────────────
 
 async def handle_currencies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
     await query.edit_message_text(t(l, "fetching_rates"), parse_mode=ParseMode.MARKDOWN)
-
     fiat, crypto, metals = await cur.fetch_all_rates()
-
     text = t(l, "currencies_header")
-
     if fiat:
-        fiat_lines = "\n".join(
-            f"  `{c}`: {v:,.4f}" for c, v in fiat.items() if c != "USD"
-        )
+        fiat_lines = "\n".join(f" `{c}`: {v:,.4f}" for c, v in fiat.items() if c != "USD")
         text += t(l, "fiat_rates", rates=fiat_lines)
     else:
         text += t(l, "rates_error") + "\n"
-
     if crypto:
         crypto_lines = "\n".join(
-            f"  `{sym}`: ${price:,.2f}" if price >= 1 else f"  `{sym}`: ${price:.6f}"
+            f" `{sym}`: ${price:,.2f}" if price >= 1 else f" `{sym}`: ${price:.6f}"
             for sym, price in crypto.items()
         )
         text += t(l, "crypto_rates", rates=crypto_lines)
-
     if metals:
-        metals_lines = "\n".join(
-            f"  `{sym}`: ${price:,.2f}" for sym, price in metals.items()
-        )
+        metals_lines = "\n".join(f" `{sym}`: ${price:,.2f}" for sym, price in metals.items())
         text += t(l, "metals_rates", rates=metals_lines)
-
-    await query.edit_message_text(
-        text,
-        reply_markup=back_keyboard(uid),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await query.edit_message_text(text, reply_markup=back_keyboard(uid), parse_mode=ParseMode.MARKDOWN)
 
 
 # ─────────────────── STATISTICS ───────────────────
 
 async def handle_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show period-selection keyboard instead of raw stats."""
     query = update.callback_query
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
     await query.edit_message_text(
         t(l, "stats_choose_period"),
         reply_markup=stats_period_keyboard(uid),
@@ -378,46 +425,25 @@ async def handle_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ── helper: compute date range for a named period ──
 def _period_dates(period: str):
-    """Return (start_date_str, end_date_str, bar_period_key) for a named period."""
     today = datetime.now().date()
     if period == "week":
-        start = today - timedelta(days=6)
-        bar   = "week"
+        start, bar = today - timedelta(days=6), "week"
     elif period == "month":
-        start = today - timedelta(days=29)
-        bar   = "month"
+        start, bar = today - timedelta(days=29), "month"
     elif period == "6m":
-        start = today - timedelta(days=179)
-        bar   = "6months"
+        start, bar = today - timedelta(days=179), "6months"
     elif period == "year":
-        start = today - timedelta(days=364)
-        bar   = "year"
+        start, bar = today - timedelta(days=364), "year"
     else:
         return None, None, None
     return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"), bar
 
 
-# ── core: generate and send charts for a given date window ──
-async def _send_charts(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    uid: int,
-    start_date: str,
-    end_date: str,
-    bar_period: str,
-    period_label: str,
-    chart_types: set = None,
-):
-    l = lang(uid)
+async def _send_charts(update, context, uid, start_date, end_date, bar_period, period_label, chart_types=None):
+    l     = lang(uid)
     query = update.callback_query
-
-    # Show spinner
-    await query.edit_message_text(
-        t(l, "stats_generating"),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await query.edit_message_text(t(l, "stats_generating"), parse_mode=ParseMode.MARKDOWN)
 
     stats = db.get_statistics_filtered(uid, start_date, end_date)
     txns  = db.get_transactions_filtered(uid, start_date, end_date)
@@ -427,56 +453,46 @@ async def _send_charts(
     total_expense = sum(stats["expense"].values())
     balance       = total_income - total_expense
 
-    # ── Text summary ──
-    summary = t(l, "stats_period_header", period=period_label)
+    summary  = t(l, "stats_period_header", period=period_label)
     summary += t(l, "stats_balance", balance=f"{balance:,.2f}", currency="")
     summary += t(l, "stats_income",  amount=f"{total_income:,.2f}",  currency="")
     summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency="")
     if not txns:
         summary += "\n" + t(l, "stats_no_data_period")
 
-    # ── Send charts, track IDs so Back can delete them ──
-    # Default: all chart types enabled
     if chart_types is None:
         chart_types = {"goals", "pie", "bar"}
 
     chart_msg_ids: list = []
     sent_any = False
 
-    # 1. Goals progress
     if "goals" in chart_types and goals:
         try:
             img = ch.generate_goals_chart(goals, title=t(l, "chart_goals_title"))
             if img:
                 msg = await context.bot.send_photo(
-                    chat_id=uid,
-                    photo=BytesIO(img),
-                    caption=t(l, "chart_goals_caption"),
-                    parse_mode=ParseMode.MARKDOWN,
+                    chat_id=uid, photo=BytesIO(img),
+                    caption=t(l, "chart_goals_caption"), parse_mode=ParseMode.MARKDOWN,
                 )
                 chart_msg_ids.append(msg.message_id)
                 sent_any = True
         except Exception as e:
             logger.warning(f"Goals chart failed: {e}")
 
-    # 2. Expense pie
     by_cat = stats.get("by_category", {})
     if "pie" in chart_types and by_cat:
         try:
             img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
             if img:
                 msg = await context.bot.send_photo(
-                    chat_id=uid,
-                    photo=BytesIO(img),
-                    caption=t(l, "chart_pie_caption"),
-                    parse_mode=ParseMode.MARKDOWN,
+                    chat_id=uid, photo=BytesIO(img),
+                    caption=t(l, "chart_pie_caption"), parse_mode=ParseMode.MARKDOWN,
                 )
                 chart_msg_ids.append(msg.message_id)
                 sent_any = True
         except Exception as e:
             logger.warning(f"Pie chart failed: {e}")
 
-    # 3. Income vs expenses bar
     if "bar" in chart_types and txns:
         try:
             img = ch.generate_bar_chart(
@@ -487,23 +503,17 @@ async def _send_charts(
             )
             if img:
                 msg = await context.bot.send_photo(
-                    chat_id=uid,
-                    photo=BytesIO(img),
-                    caption=t(l, "chart_bar_caption"),
-                    parse_mode=ParseMode.MARKDOWN,
+                    chat_id=uid, photo=BytesIO(img),
+                    caption=t(l, "chart_bar_caption"), parse_mode=ParseMode.MARKDOWN,
                 )
                 chart_msg_ids.append(msg.message_id)
                 sent_any = True
         except Exception as e:
             logger.warning(f"Bar chart failed: {e}")
 
-    # Store IDs so cb_back_stats can clean them up
     context.user_data["stats_chart_msg_ids"] = chart_msg_ids
-
-    # Edit original message → summary + back button (back_stats clears photos)
     if not sent_any:
         summary += "\n\n" + t(l, "stats_no_charts")
-
     await query.edit_message_text(
         summary,
         reply_markup=back_keyboard(uid, "back_stats"),
@@ -512,31 +522,25 @@ async def _send_charts(
 
 
 async def cb_back_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Delete chart photos then return to main menu."""
-    query = update.callback_query
+    query   = update.callback_query
     await query.answer()
-    uid      = query.from_user.id
-    chat_id  = query.message.chat_id
-
+    uid     = query.from_user.id
+    chat_id = query.message.chat_id
     for msg_id in context.user_data.pop("stats_chart_msg_ids", []):
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:
             pass
-
     await send_main_menu(update, uid, edit=True)
 
 
-# ── callback: named period selected ──
 async def cb_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid  = query.from_user.id
-    l    = lang(uid)
-    key  = query.data[len("stats_p_"):]   # week / month / 6m / year
-
+    uid   = query.from_user.id
+    l     = lang(uid)
+    key   = query.data[len("stats_p_"):]
     start, end, bar = _period_dates(key)
-
     labels = {
         "week":  t(l, "stats_period_week"),
         "month": t(l, "stats_period_month"),
@@ -544,77 +548,54 @@ async def cb_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "year":  t(l, "stats_period_year"),
     }
     label = labels.get(key, key)
-
-    # Store period details, init chart selection (all enabled by default)
-    context.user_data["stats_pending"] = {
-        "start": start, "end": end, "bar": bar, "label": label
-    }
+    context.user_data["stats_pending"]      = {"start": start, "end": end, "bar": bar, "label": label}
     if "stats_chart_types" not in context.user_data:
         context.user_data["stats_chart_types"] = {"goals", "pie", "bar"}
-
     await query.edit_message_text(
         t(l, "stats_choose_charts"),
-        reply_markup=stats_chart_type_keyboard(
-            uid, context.user_data["stats_chart_types"]
-        ),
+        reply_markup=stats_chart_type_keyboard(uid, context.user_data["stats_chart_types"]),
         parse_mode=ParseMode.MARKDOWN,
     )
 
 
-# ── chart type toggle / generate ──
 async def cb_schrt_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l   = lang(uid)
-    key = query.data[len("schrt_toggle_"):]   # goals / pie / bar
-
+    uid   = query.from_user.id
+    key   = query.data[len("schrt_toggle_"):]
     selected: set = context.user_data.get("stats_chart_types", {"goals", "pie", "bar"})
     if key in selected:
         selected.discard(key)
     else:
         selected.add(key)
     context.user_data["stats_chart_types"] = selected
-
-    await query.edit_message_reply_markup(
-        reply_markup=stats_chart_type_keyboard(uid, selected)
-    )
+    await query.edit_message_reply_markup(reply_markup=stats_chart_type_keyboard(uid, selected))
 
 
 async def cb_schrt_generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l   = lang(uid)
-
+    uid     = query.from_user.id
+    l       = lang(uid)
     pending = context.user_data.get("stats_pending")
     if not pending:
         await query.edit_message_text(t(l, "error"), parse_mode=ParseMode.MARKDOWN)
         return
-
     selected: set = context.user_data.get("stats_chart_types", {"goals", "pie", "bar"})
     if not selected:
         await query.answer(t(l, "stats_no_chart_selected"), show_alert=True)
         return
-
-    await _send_charts(
-        update, context, uid,
-        pending["start"], pending["end"], pending["bar"], pending["label"],
-        chart_types=selected,
-    )
+    await _send_charts(update, context, uid,
+                       pending["start"], pending["end"], pending["bar"], pending["label"],
+                       chart_types=selected)
 
 
-# ── conversation: custom date range ──
 async def stats_custom_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry point: user chose 'Custom Range'."""
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
     l   = lang(uid)
-    await query.edit_message_text(
-        t(l, "stats_enter_start_date"),
-        parse_mode=ParseMode.MARKDOWN,
-    )
+    await query.edit_message_text(t(l, "stats_enter_start_date"), parse_mode=ParseMode.MARKDOWN)
     return S_STATS_CUSTOM_START
 
 
@@ -639,37 +620,25 @@ async def stats_custom_got_end(update: Update, context: ContextTypes.DEFAULT_TYP
     except ValueError:
         await update.message.reply_text(t(l, "stats_invalid_date"))
         return S_STATS_CUSTOM_END
-
     start_str = context.user_data.get("stats_start", "")
     end_str   = update.message.text.strip()
-
     try:
         start_dt = datetime.strptime(start_str, "%Y-%m-%d")
     except ValueError:
         await update.message.reply_text(t(l, "error"))
         return ConversationHandler.END
-
     if end_dt < start_dt:
         await update.message.reply_text(t(l, "stats_end_before_start"))
         return S_STATS_CUSTOM_END
-
     days  = (end_dt - start_dt).days
     bar   = ch.period_for_days(days)
     label = f"{start_str} — {end_str}"
-
-    # Store period details so cb_schrt_generate can use them
-    context.user_data["stats_pending"] = {
-        "start": start_str, "end": end_str, "bar": bar, "label": label
-    }
+    context.user_data["stats_pending"] = {"start": start_str, "end": end_str, "bar": bar, "label": label}
     if "stats_chart_types" not in context.user_data:
         context.user_data["stats_chart_types"] = {"goals", "pie", "bar"}
-
-    # Show chart type picker as a new message (we're in a conversation, no query)
     await update.message.reply_text(
         t(l, "stats_choose_charts"),
-        reply_markup=stats_chart_type_keyboard(
-            uid, context.user_data["stats_chart_types"]
-        ),
+        reply_markup=stats_chart_type_keyboard(uid, context.user_data["stats_chart_types"]),
         parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
@@ -679,10 +648,9 @@ async def stats_custom_got_end(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    uid = query.from_user.id
-    l = lang(uid)
-    txns = db.get_transactions(uid)
-
+    uid   = query.from_user.id
+    l     = lang(uid)
+    txns  = db.get_transactions(uid)
     if not txns:
         await query.edit_message_text(
             t(l, "no_transactions"),
@@ -690,24 +658,18 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
             parse_mode=ParseMode.MARKDOWN
         )
         return
-
     text = t(l, "transactions_header")
     for tx in txns:
-        emoji = "📈" if tx["type"] == "income" else "📉"
+        emoji    = "📈" if tx["type"] == "income" else "📉"
         date_str = tx["created_at"][:10] if tx["created_at"] else "?"
-        desc = tx["description"] or "—"
-        text += t(l, "transaction_line",
-                  emoji=emoji,
-                  date=date_str,
-                  amount=f"{tx['amount']:,.2f}",
-                  currency=tx["currency"],
-                  category=tx["category"],
-                  description=desc)
-
-    # Telegram has 4096 char limit
+        desc     = tx["description"] or "—"
+        account  = tx.get("account_name") or "—"
+        text    += t(l, "transaction_line",
+                     emoji=emoji, date=date_str,
+                     amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
+                     category=tx["category"], account=account, description=desc)
     if len(text) > 4000:
         text = text[:4000] + "\n..."
-
     await query.edit_message_text(
         text,
         reply_markup=back_keyboard(uid, "menu_transactions"),
@@ -717,27 +679,12 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
 
 # ─────────────────── DELETE INDIVIDUAL TRANSACTION ───────────────────
 
-def _trans_select_keyboard(txns: list, uid: int) -> InlineKeyboardMarkup:
-    """Build a keyboard where each row is one transaction + a delete button."""
-    l = lang(uid)
-    rows = []
-    for tx in txns:
-        emoji    = "📈" if tx["type"] == "income" else "📉"
-        date_str = tx["created_at"][:10] if tx["created_at"] else "?"
-        label    = f"{emoji} {date_str}  {tx['amount']:,.0f} {tx['currency']}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"tdel_{tx['id']}")])
-    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="menu_transactions")])
-    return InlineKeyboardMarkup(rows)
-
-
 async def trans_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Entry: show list of transactions to delete."""
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l   = lang(uid)
-
-    txns = db.get_transactions(uid, limit=20)
+    uid   = query.from_user.id
+    l     = lang(uid)
+    txns  = db.get_transactions(uid, limit=20)
     if not txns:
         await query.edit_message_text(
             t(l, "no_transactions"),
@@ -745,7 +692,6 @@ async def trans_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode=ParseMode.MARKDOWN,
         )
         return ConversationHandler.END
-
     await query.edit_message_text(
         t(l, "choose_transaction_to_delete"),
         reply_markup=_trans_select_keyboard(txns, uid),
@@ -755,16 +701,12 @@ async def trans_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Delete chosen transaction and recalculate all goals."""
     query = update.callback_query
     await query.answer()
-    uid    = query.from_user.id
-    l      = lang(uid)
-    tx_id  = int(query.data.split("_")[1])
-
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
     db.delete_transaction(tx_id)
-
-    # Recalculate all goals from scratch after deletion
     await query.edit_message_text(t(l, "recalculating_goals"), parse_mode=ParseMode.MARKDOWN)
     conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
     try:
@@ -772,9 +714,7 @@ async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
             await cur.fetch_all_rates()
     except Exception:
         pass
-
     db.recalculate_all_goals(uid, conversion_rates)
-
     await query.edit_message_text(
         t(l, "transaction_deleted"),
         reply_markup=back_keyboard(uid, "menu_transactions"),
@@ -784,31 +724,34 @@ async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cb_clear_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for confirmation to clear all transactions."""
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    l = lang(uid)
-    
+    l   = lang(uid)
     await query.edit_message_text(
         t(l, "confirm_clear_transactions"),
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(t(l, "btn_yes"), callback_data="trans_clear_confirm"),
-             InlineKeyboardButton(t(l, "btn_no"), callback_data="back_transactions")],
+             InlineKeyboardButton(t(l, "btn_no"),  callback_data="back_transactions")],
         ]),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def cb_clear_transactions_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Actually clear all transactions."""
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
-    
+    uid   = query.from_user.id
+    l     = lang(uid)
     count = db.delete_all_transactions(uid)
-    
+    # Recalculate goals after clearing all transactions
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+    db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "transactions_cleared", count=count),
         reply_markup=back_keyboard(uid, "menu_transactions"),
@@ -816,46 +759,167 @@ async def cb_clear_transactions_confirm(update: Update, context: ContextTypes.DE
     )
 
 
-# ─────────────────── VIEW GOALS ───────────────────
+# ─────────────────── ACCOUNTS ───────────────────
 
-async def handle_view_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid = query.from_user.id
-    l = lang(uid)
-    goals = db.get_goals(uid)
-    text = format_goals_text(goals, l)
+async def handle_view_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    uid      = query.from_user.id
+    l        = lang(uid)
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "no_accounts"),
+            reply_markup=back_keyboard(uid, "menu_accounts"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    text = t(l, "accounts_header")
+    for acc in accounts:
+        emoji = ACCOUNT_TYPE_EMOJI.get(acc["account_type"], "🏦")
+        text += t(l, "account_line",
+                  emoji=emoji, name=acc["name"],
+                  type=_account_type_label(acc["account_type"], l),
+                  balance=acc["computed_balance"], currency=acc["currency"])
     await query.edit_message_text(
         text,
-        reply_markup=back_keyboard(uid, "menu_goals"),
+        reply_markup=back_keyboard(uid, "menu_accounts"),
         parse_mode=ParseMode.MARKDOWN
     )
 
 
-# ─────────────────── SETTINGS ───────────────────
+# ─── Add account conversation ───
 
-async def cb_settings_base_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def account_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    l = lang(uid)
+    l   = lang(uid)
     await query.edit_message_text(
-        t(l, "choose_base_currency"),
-        reply_markup=currency_keyboard("setbase", uid),
+        t(l, "choose_account_type"),
+        reply_markup=account_type_keyboard(uid),
         parse_mode=ParseMode.MARKDOWN
     )
-    return S_SETTINGS_BASE_CURRENCY
+    return S_ACCOUNT_TYPE
 
 
-async def cb_set_base_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def account_type_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
-    chosen = query.data.split("_", 1)[1]  # setbase_USD → USD
-    db.set_user_base_currency(uid, chosen)
+    uid   = query.from_user.id
+    l     = lang(uid)
+    atype = query.data.split("_")[1]   # bank / crypto / cash
+    context.user_data["account_type"] = atype
+    await query.edit_message_text(t(l, "enter_account_name"), parse_mode=ParseMode.MARKDOWN)
+    return S_ACCOUNT_NAME
+
+
+async def account_name_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    l    = lang(uid)
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text(t(l, "invalid_input"))
+        return S_ACCOUNT_NAME
+    context.user_data["account_name"] = name
+    await update.message.reply_text(
+        t(l, "enter_account_currency"),
+        reply_markup=currency_keyboard("acur", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_ACCOUNT_CURRENCY
+
+
+async def account_currency_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    currency = query.data.split("_", 1)[1]
+    context.user_data["account_currency"] = currency
+    await query.edit_message_text(t(l, "enter_account_balance"), parse_mode=ParseMode.MARKDOWN)
+    return S_ACCOUNT_BALANCE
+
+
+async def account_balance_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    try:
+        balance = float(update.message.text.replace(",", "."))
+        if balance < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t(l, "invalid_amount"))
+        return S_ACCOUNT_BALANCE
+
+    ud       = context.user_data
+    atype    = ud["account_type"]
+    name     = ud["account_name"]
+    currency = ud["account_currency"]
+
+    db.add_account(uid, name, currency, balance, atype)
+
+    # Recalculate goal progress now that a new account with balance exists
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+    db.recalculate_all_goals(uid, conversion_rates)
+
+    emoji     = ACCOUNT_TYPE_EMOJI.get(atype, "🏦")
+    type_label = _account_type_label(atype, l)
+    await update.message.reply_text(
+        t(l, "account_saved",
+          name=f"{emoji} {name}", type=type_label,
+          balance=f"{balance:,.2f}", currency=currency),
+        reply_markup=back_keyboard(uid, "menu_accounts"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
+# ─── Delete account conversation ───
+
+async def account_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "no_accounts"),
+            reply_markup=back_keyboard(uid, "menu_accounts"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
     await query.edit_message_text(
-        t(l, "base_currency_set", currency=chosen),
-        reply_markup=back_keyboard(uid),
+        t(l, "choose_account_to_delete"),
+        reply_markup=accounts_select_keyboard(accounts, "adel", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_ACCOUNT_SELECT_DELETE
+
+
+async def account_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query      = update.callback_query
+    await query.answer()
+    uid        = query.from_user.id
+    l          = lang(uid)
+    account_id = int(query.data.split("_")[1])
+    db.delete_account(account_id)
+    # Recalculate goals after account deletion
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+    db.recalculate_all_goals(uid, conversion_rates)
+    await query.edit_message_text(
+        t(l, "account_deleted"),
+        reply_markup=back_keyboard(uid, "menu_accounts"),
         parse_mode=ParseMode.MARKDOWN
     )
     return ConversationHandler.END
@@ -864,12 +928,50 @@ async def cb_set_base_currency(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─────────────────── ADD TRANSACTION ───────────────────
 
 async def trans_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry: check accounts exist, then ask to pick one."""
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
+
+    # Require at least one account
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "no_accounts_for_transaction"),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(t(l, "btn_add_account"), callback_data="account_add")],
+                [InlineKeyboardButton(t(l, "back"),            callback_data="menu_transactions")],
+            ]),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+
     t_type = "income" if query.data == "trans_add_income" else "expense"
-    context.user_data["trans_type"] = t_type
+    context.user_data["trans_type"]     = t_type
+    context.user_data["trans_accounts"] = accounts   # cache for next step
+
+    await query.edit_message_text(
+        t(l, "choose_account_for_transaction"),
+        reply_markup=accounts_select_keyboard(accounts, "tacc", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_TRANS_ACCOUNT
+
+
+async def trans_account_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query      = update.callback_query
+    await query.answer()
+    uid        = query.from_user.id
+    l          = lang(uid)
+    account_id = int(query.data.split("_")[1])
+
+    # Fetch the chosen account so we know its currency
+    acc = db.get_account(account_id)
+    context.user_data["trans_account_id"]       = account_id
+    context.user_data["trans_account_name"]     = acc["name"] if acc else "?"
+    context.user_data["trans_account_currency"] = acc["currency"] if acc else "USD"
+
     await query.edit_message_text(
         t(l, "enter_amount"),
         reply_markup=InlineKeyboardMarkup([
@@ -882,7 +984,7 @@ async def trans_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def trans_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    l = lang(uid)
+    l   = lang(uid)
     try:
         amount = float(update.message.text.replace(",", "."))
         if amount <= 0:
@@ -890,8 +992,8 @@ async def trans_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t(l, "invalid_amount"))
         return S_TRANS_AMOUNT
-
     context.user_data["trans_amount"] = amount
+    # Pre-select account currency but let user change
     await update.message.reply_text(
         t(l, "enter_currency"),
         reply_markup=currency_keyboard("tcur", uid),
@@ -903,8 +1005,8 @@ async def trans_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def trans_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
     chosen = query.data.split("_", 1)[1]
     context.user_data["trans_currency"] = chosen
     t_type = context.user_data.get("trans_type", "expense")
@@ -917,72 +1019,61 @@ async def trans_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def trans_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query      = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
-    cat_key = query.data  # cat_cat_food → need to strip prefix
-    # callback_data is like "cat_cat_food"
-    cat_name_key = query.data[4:]  # removes "cat_"
-    cat_name = t(l, cat_name_key)
+    uid        = query.from_user.id
+    l          = lang(uid)
+    cat_name_key = query.data[4:]       # "cat_cat_food" → "cat_food"
+    cat_name     = t(l, cat_name_key)
     context.user_data["trans_category"] = cat_name
-    await query.edit_message_text(
-        t(l, "enter_description"),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await query.edit_message_text(t(l, "enter_description"), parse_mode=ParseMode.MARKDOWN)
     return S_TRANS_DESC
 
 
 async def trans_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    l = lang(uid)
+    uid  = update.effective_user.id
+    l    = lang(uid)
     desc = "" if update.message.text == "/skip" else update.message.text
-    ud = context.user_data
-    t_type = ud.get("trans_type", "expense")
+    ud   = context.user_data
 
-    tx_id = db.add_transaction(
-        uid,
-        t_type,
-        ud["trans_amount"],
-        ud["trans_currency"],
-        ud["trans_category"],
-        desc
+    t_type     = ud.get("trans_type", "expense")
+    account_id = ud.get("trans_account_id")
+    acc_name   = ud.get("trans_account_name", "—")
+
+    db.add_transaction(
+        uid, t_type,
+        ud["trans_amount"], ud["trans_currency"],
+        ud["trans_category"], desc,
+        account_id=account_id
     )
-    
-    # Fetch conversion rates for goal currency conversion
-    conversion_rates = {
-        'fiat': {},
-        'crypto': {},
-        'metals': {}
-    }
+
+    # Recalculate all goal progress from account balances
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
     try:
-        conversion_rates['fiat'], conversion_rates['crypto'], conversion_rates['metals'] = await cur.fetch_all_rates()
-    except:
-        pass  # If rates fetch fails, update will still work for matching currencies
-    
-    # Update goal progress from transaction (with automatic currency conversion)
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+
     updated_goals = db.update_goals_from_transaction(
-        uid,
-        ud["trans_amount"],
-        ud["trans_currency"],
-        conversion_rates
+        uid, ud["trans_amount"], ud["trans_currency"], conversion_rates
     )
 
-    type_label = t(l, "income") if t_type == "income" else t(l, "expense")
+    type_label   = t(l, "income") if t_type == "income" else t(l, "expense")
     message_text = t(l, "transaction_saved",
-          type=type_label,
-          amount=f"{ud['trans_amount']:,.2f}",
-          currency=ud["trans_currency"],
-          category=ud["trans_category"],
-          description=desc or "—")
-    
-    # Add goal progress update info if goals were updated
+                     type=type_label,
+                     account=acc_name,
+                     amount=f"{ud['trans_amount']:,.2f}",
+                     currency=ud["trans_currency"],
+                     category=ud["trans_category"],
+                     description=desc or "—")
+
     if updated_goals:
-        message_text += "\n\n📊 " + t(l, "goal_progress_updated") + ":\n"
+        message_text += f"\n\n📊 {t(l, 'goal_progress_updated')}:\n"
         for goal in updated_goals:
-            status = "✅ " + t(l, "goal_completed") if goal["completed"] else ""
+            status        = "✅ " + t(l, "goal_completed") if goal["completed"] else ""
             message_text += f"\n• {goal['title']}: {goal['current_amount']:,.2f}/{goal['target_amount']:,.2f} {goal['currency']} {status}"
-    
+
     await update.message.reply_text(
         message_text,
         reply_markup=back_keyboard(uid, "menu_transactions"),
@@ -997,7 +1088,7 @@ async def goal_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    l = lang(uid)
+    l   = lang(uid)
     await query.edit_message_text(
         t(l, "choose_goal_type"),
         reply_markup=goal_type_keyboard(uid),
@@ -1009,20 +1100,17 @@ async def goal_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def goal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid    = query.from_user.id
+    l      = lang(uid)
     chosen = "save" if query.data == "gtype_save" else "repay"
     context.user_data["goal_type"] = chosen
-    await query.edit_message_text(
-        t(l, "enter_goal_title"),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await query.edit_message_text(t(l, "enter_goal_title"), parse_mode=ParseMode.MARKDOWN)
     return S_GOAL_TITLE
 
 
 async def goal_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    l = lang(uid)
+    l   = lang(uid)
     context.user_data["goal_title"] = update.message.text
     await update.message.reply_text(t(l, "enter_goal_amount"), parse_mode=ParseMode.MARKDOWN)
     return S_GOAL_AMOUNT
@@ -1030,7 +1118,7 @@ async def goal_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def goal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    l = lang(uid)
+    l   = lang(uid)
     try:
         amount = float(update.message.text.replace(",", "."))
         if amount <= 0:
@@ -1038,7 +1126,6 @@ async def goal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t(l, "invalid_amount"))
         return S_GOAL_AMOUNT
-
     context.user_data["goal_amount"] = amount
     await update.message.reply_text(
         t(l, "enter_goal_currency"),
@@ -1051,8 +1138,8 @@ async def goal_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def goal_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid    = query.from_user.id
+    l      = lang(uid)
     chosen = query.data.split("_", 1)[1]
     context.user_data["goal_currency"] = chosen
     await query.edit_message_text(t(l, "enter_goal_deadline"), parse_mode=ParseMode.MARKDOWN)
@@ -1060,9 +1147,9 @@ async def goal_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def goal_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    l = lang(uid)
-    text = update.message.text
+    uid      = update.effective_user.id
+    l        = lang(uid)
+    text     = update.message.text
     deadline = None
 
     if text != "/skip":
@@ -1074,8 +1161,6 @@ async def goal_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return S_GOAL_DEADLINE
 
     ud = context.user_data
-
-    # Fetch rates to calculate initial progress from existing transactions
     conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
     try:
         conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
@@ -1085,9 +1170,9 @@ async def goal_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     initial_amount = db.calculate_initial_goal_amount(uid, ud["goal_currency"], conversion_rates)
 
-    goal_id = db.add_goal(uid, ud["goal_title"], ud["goal_type"],
-                          ud["goal_amount"], ud["goal_currency"], deadline,
-                          initial_amount=initial_amount)
+    db.add_goal(uid, ud["goal_title"], ud["goal_type"],
+                ud["goal_amount"], ud["goal_currency"], deadline,
+                initial_amount=initial_amount)
 
     pct = min(100, round(initial_amount / ud["goal_amount"] * 100)) if ud["goal_amount"] else 0
 
@@ -1105,15 +1190,28 @@ async def goal_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ─────────────────── UPDATE GOAL PROGRESS ───────────────────
+# ─────────────────── VIEW GOALS ───────────────────
+
+async def handle_view_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = query.from_user.id
+    l     = lang(uid)
+    goals = db.get_goals(uid)
+    text  = format_goals_text(goals, l)
+    await query.edit_message_text(
+        text,
+        reply_markup=back_keyboard(uid, "menu_goals"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
 
 # ─────────────────── DELETE GOAL ───────────────────
 
 async def goal_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
     goals = db.get_goals(uid)
     if not goals:
         await query.edit_message_text(
@@ -1122,7 +1220,6 @@ async def goal_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
-
     await query.edit_message_text(
         t(l, "choose_goal_to_delete"),
         reply_markup=goals_select_keyboard(goals, "gdel", uid),
@@ -1132,10 +1229,10 @@ async def goal_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def goal_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query   = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid     = query.from_user.id
+    l       = lang(uid)
     goal_id = int(query.data.split("_")[1])
     db.delete_goal(goal_id)
     await query.edit_message_text(
@@ -1151,8 +1248,8 @@ async def goal_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def goal_convert_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid   = query.from_user.id
+    l     = lang(uid)
     goals = db.get_goals(uid)
     if not goals:
         await query.edit_message_text(
@@ -1161,7 +1258,6 @@ async def goal_convert_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode=ParseMode.MARKDOWN
         )
         return ConversationHandler.END
-
     await query.edit_message_text(
         t(l, "choose_goal_to_convert"),
         reply_markup=goals_select_keyboard(goals, "gconv", uid),
@@ -1171,10 +1267,10 @@ async def goal_convert_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def goal_select_convert(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query   = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid     = query.from_user.id
+    l       = lang(uid)
     goal_id = int(query.data.split("_")[1])
     context.user_data["convert_goal_id"] = goal_id
     await query.edit_message_text(
@@ -1186,28 +1282,23 @@ async def goal_select_convert(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def goal_new_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query        = update.callback_query
     await query.answer()
-    uid = query.from_user.id
-    l = lang(uid)
+    uid          = query.from_user.id
+    l            = lang(uid)
     new_currency = query.data.split("_", 1)[1]
-    goal_id = context.user_data["convert_goal_id"]
-    goal = db.get_goal(goal_id)
+    goal_id      = context.user_data["convert_goal_id"]
+    goal         = db.get_goal(goal_id)
 
     if not goal:
         await query.edit_message_text(t(l, "error"), parse_mode=ParseMode.MARKDOWN)
         return ConversationHandler.END
 
-    # Fetch rates to convert
     await query.edit_message_text(t(l, "fetching_rates"), parse_mode=ParseMode.MARKDOWN)
     fiat, crypto, metals = await cur.fetch_all_rates()
 
-    new_target = cur.convert_amount(
-        goal["target_amount"], goal["currency"], new_currency, fiat, crypto, metals
-    )
-    new_current = cur.convert_amount(
-        goal["current_amount"], goal["currency"], new_currency, fiat, crypto, metals
-    )
+    new_target  = cur.convert_amount(goal["target_amount"],  goal["currency"], new_currency, fiat, crypto, metals)
+    new_current = cur.convert_amount(goal["current_amount"], goal["currency"], new_currency, fiat, crypto, metals)
 
     if new_target is None:
         await query.edit_message_text(t(l, "rates_error"), parse_mode=ParseMode.MARKDOWN)
@@ -1226,13 +1317,43 @@ async def goal_new_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ─────────────────── SETTINGS ───────────────────
+
+async def cb_settings_base_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    await query.edit_message_text(
+        t(l, "choose_base_currency"),
+        reply_markup=currency_keyboard("setbase", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_SETTINGS_BASE_CURRENCY
+
+
+async def cb_set_base_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    chosen = query.data.split("_", 1)[1]
+    db.set_user_base_currency(uid, chosen)
+    await query.edit_message_text(
+        t(l, "base_currency_set", currency=chosen),
+        reply_markup=back_keyboard(uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
 # ─────────────────── CANCEL ───────────────────
 
 async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = query.from_user.id
-    l = lang(uid)
+    l   = lang(uid)
     await query.edit_message_text(t(l, "cancelled"), parse_mode=ParseMode.MARKDOWN)
     await asyncio.sleep(0.3)
     await send_main_menu(update, uid, edit=True)
@@ -1241,7 +1362,7 @@ async def conv_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    l = lang(uid)
+    l   = lang(uid)
     await update.message.reply_text(
         t(l, "cancelled"),
         reply_markup=main_menu_keyboard(uid),
@@ -1259,7 +1380,7 @@ def build_application() -> Application:
 
     app = Application.builder().token(token).build()
 
-    # ── Delete individual transaction conversation ──
+    # ── Delete individual transaction ──
     trans_delete_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trans_delete_start, pattern="^trans_delete$")],
         states={
@@ -1272,12 +1393,15 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Add income/expense conversation ──
+    # ── Add transaction (requires account selection first) ──
     trans_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(trans_start, pattern="^trans_add_(income|expense)$"),
         ],
         states={
+            S_TRANS_ACCOUNT: [
+                CallbackQueryHandler(trans_account_selected, pattern="^tacc_"),
+            ],
             S_TRANS_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, trans_amount),
             ],
@@ -1299,13 +1423,44 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Add goal conversation ──
+    # ── Add account ──
+    account_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(account_add_start, pattern="^account_add$")],
+        states={
+            S_ACCOUNT_TYPE:     [CallbackQueryHandler(account_type_chosen,     pattern="^atype_")],
+            S_ACCOUNT_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, account_name_entered)],
+            S_ACCOUNT_CURRENCY: [CallbackQueryHandler(account_currency_chosen, pattern="^acur_")],
+            S_ACCOUNT_BALANCE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, account_balance_entered)],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Delete account ──
+    account_delete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(account_delete_start, pattern="^account_delete$")],
+        states={
+            S_ACCOUNT_SELECT_DELETE: [
+                CallbackQueryHandler(account_select_delete, pattern="^adel_")
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Add goal ──
     goal_add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(goal_add_start, pattern="^goal_add$")],
         states={
-            S_GOAL_TYPE: [CallbackQueryHandler(goal_type, pattern="^gtype_")],
-            S_GOAL_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_title)],
-            S_GOAL_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_amount)],
+            S_GOAL_TYPE:     [CallbackQueryHandler(goal_type,     pattern="^gtype_")],
+            S_GOAL_TITLE:    [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_title)],
+            S_GOAL_AMOUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_amount)],
             S_GOAL_CURRENCY: [CallbackQueryHandler(goal_currency, pattern="^gcur_")],
             S_GOAL_DEADLINE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, goal_deadline),
@@ -1319,7 +1474,7 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Delete goal conversation ──
+    # ── Delete goal ──
     goal_delete_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(goal_delete_start, pattern="^goal_delete$")],
         states={
@@ -1332,12 +1487,12 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Convert goal currency conversation ──
+    # ── Convert goal currency ──
     goal_convert_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(goal_convert_start, pattern="^goal_convert$")],
         states={
             S_GOAL_SELECT_CONVERT: [CallbackQueryHandler(goal_select_convert, pattern="^gconv_")],
-            S_GOAL_NEW_CURRENCY: [CallbackQueryHandler(goal_new_currency, pattern="^gnewcur_")],
+            S_GOAL_NEW_CURRENCY:   [CallbackQueryHandler(goal_new_currency,   pattern="^gnewcur_")],
         },
         fallbacks=[
             CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
@@ -1346,7 +1501,7 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Settings base currency conversation ──
+    # ── Settings base currency ──
     settings_cur_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(cb_settings_base_currency, pattern="^settings_base_currency$")],
         states={
@@ -1359,7 +1514,7 @@ def build_application() -> Application:
         per_message=False,
     )
 
-    # ── Custom stats date-range conversation ──
+    # ── Custom stats date-range ──
     stats_custom_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(stats_custom_start, pattern="^stats_p_custom$")],
         states={
@@ -1370,68 +1525,56 @@ def build_application() -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, stats_custom_got_end),
             ],
         },
-        fallbacks=[
-            CommandHandler("cancel", text_cancel),
-        ],
+        fallbacks=[CommandHandler("cancel", text_cancel)],
         per_message=False,
     )
 
-    # Register conversations (order matters — stats_custom_conv first!)
+    # Register conversations (stats_custom_conv first — most specific entry pattern)
     for conv in [
         stats_custom_conv,
-        trans_delete_conv,
-        trans_conv, goal_add_conv,
-        goal_delete_conv, goal_convert_conv,
+        trans_delete_conv, trans_conv,
+        account_add_conv, account_delete_conv,
+        goal_add_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
     ]:
         app.add_handler(conv)
 
-    # ── Non-conversation callbacks ──
+    # ── Non-conversation handlers ──
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("menu",  cmd_menu))
 
-    # Language selection
     app.add_handler(CallbackQueryHandler(cb_set_language, pattern="^setlang_"))
 
-    # Main menu routing
     app.add_handler(CallbackQueryHandler(
         cb_main_menu,
-        pattern="^(back_main|menu_transactions|menu_goals|menu_currencies|"
+        pattern="^(back_main|menu_transactions|menu_goals|menu_accounts|menu_currencies|"
                 "menu_stats|menu_settings|settings_language|"
-                "trans_view|trans_clear|goal_view)$"
+                "trans_view|trans_clear|goal_view|account_view)$"
     ))
 
-    # Back from stats — deletes chart photos then goes to main menu
-    app.add_handler(CallbackQueryHandler(cb_back_stats, pattern="^back_stats$"))
-    
-    # Transaction clear confirmation
+    app.add_handler(CallbackQueryHandler(cb_back_stats,               pattern="^back_stats$"))
     app.add_handler(CallbackQueryHandler(cb_clear_transactions_confirm, pattern="^trans_clear_confirm$"))
-    app.add_handler(CallbackQueryHandler(cb_main_menu, pattern="^back_transactions$"))
+    app.add_handler(CallbackQueryHandler(cb_main_menu,                pattern="^back_transactions$"))
 
-    # Stats period buttons (week / month / 6m / year)
-    app.add_handler(CallbackQueryHandler(cb_stats_period, pattern="^stats_p_(week|month|6m|year)$"))
-
-    # Chart type toggle buttons and generate
-    app.add_handler(CallbackQueryHandler(cb_schrt_toggle,   pattern="^schrt_toggle_"))
-    app.add_handler(CallbackQueryHandler(cb_schrt_generate, pattern="^schrt_generate$"))
+    app.add_handler(CallbackQueryHandler(cb_stats_period,    pattern="^stats_p_(week|month|6m|year)$"))
+    app.add_handler(CallbackQueryHandler(cb_schrt_toggle,    pattern="^schrt_toggle_"))
+    app.add_handler(CallbackQueryHandler(cb_schrt_generate,  pattern="^schrt_generate$"))
 
     return app
 
 
-
 async def on_bot_start(app: Application) -> None:
-    """Set bot commands on startup."""
     await app.bot.set_my_commands([
-        BotCommand("start", "Start / Language select"),
-        BotCommand("menu", "Open main menu"),
+        BotCommand("start",  "Start / Language select"),
+        BotCommand("menu",   "Open main menu"),
         BotCommand("cancel", "Cancel current action"),
     ])
-    logger.info("\u2705 Money Manager Bot commands registered")
+    logger.info("✅ Money Manager Bot commands registered")
 
 
 if __name__ == "__main__":
     db.init_db()
     app = build_application()
     app.post_init = on_bot_start
-    logger.info("\u2705 Money Manager Bot started!")
+    logger.info("✅ Money Manager Bot started!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
