@@ -1,7 +1,7 @@
 LANGUAGES = {
     "en": {
         # General
-        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and view financial statistics.\n\n If you interested in new updates and receive feedback you can check this channel: @lookatpatch\n\nPlease choose your language / Выберите язык:",
+        "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and view financial statistics.\n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
@@ -82,14 +82,13 @@ LANGUAGES = {
         "cat_loan_payment": "🏦 Loan Payment",
         "cat_other": "📦 Other",
 
+        "btn_edit_goal": "✏️ Edit Target Amount",
+        "choose_goal_to_edit": "✏️ *Choose a goal to edit:*",
+        "enter_new_goal_amount": "✏️ *{title}*\nCurrent target: `{current_target} {currency}`\n\nEnter the new target amount:",
+        "goal_target_updated": "✅ Goal updated!\n\n*{title}*\nNew target: `{new_target} {currency}`\nProgress: `{current}` / `{new_target} {currency}` ({pct}%)\n{status}",
+
         # Goals
         "choose_goal_type": "Choose goal type:",
-        "goal_type_save": "💰 Accumulate savings",
-        "goal_type_repay": "🏦 Repay a loan/debt",
-        "enter_goal_title": "📝 Enter goal title (e.g. 'Buy a car', 'Pay off loan'):",
-        "enter_goal_amount": "💵 Enter target amount:",
-        "enter_goal_currency": "💱 Choose currency for this goal:",
-        "enter_goal_deadline": "📅 Enter deadline (YYYY-MM-DD) or /skip:",
         "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}\n\n📊 Starting progress: {initial} ({pct}%)",
         "no_goals": "📭 No goals set yet.",
         "goals_header": "🎯 *Your Goals:*\n\n",
@@ -158,7 +157,7 @@ LANGUAGES = {
 
     "ru": {
         # General
-        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и просматривать финансовую статистику.\n\n Если вас интересуют обновления и вы хотите обратной связи, можете зайти на канал: @lookatpatch\n\nПожалуйста, выберите язык / Please choose your language:",
+        "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и просматривать финансовую статистику.\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
@@ -258,6 +257,10 @@ LANGUAGES = {
         "choose_goal_to_convert": "Выберите цель для конвертации валюты:",
         "choose_new_currency": "Выберите новую валюту для этой цели:",
         "goal_converted": "✅ Валюта цели конвертирована!\n\n*{title}*\nНовая цель: {amount} {currency}",
+        "btn_edit_goal": "✏️ Изменить целевую сумму",
+        "choose_goal_to_edit": "✏️ *Выберите цель для редактирования:*",
+        "enter_new_goal_amount": "✏️ *{title}*\nТекущая цель: `{current_target} {currency}`\n\nВведите новую целевую сумму:",
+        "goal_target_updated": "✅ Цель обновлена!\n\n*{title}*\nНовая цель: `{new_target} {currency}`\nПрогресс: `{current}` / `{new_target} {currency}` ({pct}%)\n{status}",
 
         # Currencies
         "currencies_header": "💱 *Курсы в реальном времени*\n_(база: USD)_\n\n",
