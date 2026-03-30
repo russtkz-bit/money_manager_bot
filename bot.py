@@ -42,9 +42,10 @@ logger = logging.getLogger(__name__)
     S_GOAL_TYPE, S_GOAL_TITLE, S_GOAL_AMOUNT,
     S_GOAL_CURRENCY, S_GOAL_DEADLINE,
 
-    # Goal delete / convert
+    # Goal delete / convert / edit
     S_GOAL_SELECT_DELETE,
     S_GOAL_SELECT_CONVERT, S_GOAL_NEW_CURRENCY,
+    S_GOAL_SELECT_EDIT, S_GOAL_EDIT_AMOUNT,
 
     # Settings
     S_SETTINGS_BASE_CURRENCY,
@@ -58,7 +59,7 @@ logger = logging.getLogger(__name__)
     # Account flow
     S_ACCOUNT_TYPE, S_ACCOUNT_NAME, S_ACCOUNT_CURRENCY, S_ACCOUNT_BALANCE,
     S_ACCOUNT_SELECT_DELETE,
-) = range(23)
+) = range(25)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -114,6 +115,7 @@ def goals_keyboard(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(l, "btn_add_goal"),    callback_data="goal_add")],
         [InlineKeyboardButton(t(l, "btn_view_goals"),  callback_data="goal_view")],
+        [InlineKeyboardButton(t(l, "btn_edit_goal"),   callback_data="goal_edit")],
         [InlineKeyboardButton(t(l, "btn_convert_goal"), callback_data="goal_convert"),
          InlineKeyboardButton(t(l, "btn_delete_goal"), callback_data="goal_delete")],
         [InlineKeyboardButton(t(l, "back"),            callback_data="back_main")],
@@ -1243,6 +1245,101 @@ async def goal_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 
+# ─────────────────── EDIT GOAL TARGET AMOUNT ───────────────────
+
+async def goal_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    goals = db.get_goals(uid)
+    if not goals:
+        await query.edit_message_text(
+            t(l, "no_goals"),
+            reply_markup=back_keyboard(uid, "menu_goals"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_goal_to_edit"),
+        reply_markup=goals_select_keyboard(goals, "gedit", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_GOAL_SELECT_EDIT
+
+
+async def goal_select_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query   = update.callback_query
+    await query.answer()
+    uid     = query.from_user.id
+    l       = lang(uid)
+    goal_id = int(query.data.split("_")[1])
+    goal    = db.get_goal(goal_id)
+    context.user_data["edit_goal_id"] = goal_id
+    await query.edit_message_text(
+        t(l, "enter_new_goal_amount",
+          title=goal["title"],
+          current_target=f"{goal['target_amount']:,.2f}",
+          currency=goal["currency"]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_GOAL_EDIT_AMOUNT
+
+
+async def goal_edit_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid     = update.effective_user.id
+    l       = lang(uid)
+    goal_id = context.user_data.get("edit_goal_id")
+    if not goal_id:
+        await update.message.reply_text(t(l, "error"))
+        return ConversationHandler.END
+
+    try:
+        new_target = float(update.message.text.replace(",", "."))
+        if new_target <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t(l, "invalid_amount"))
+        return S_GOAL_EDIT_AMOUNT
+
+    # Fetch current goal to pass current_amount to update function
+    goal = db.get_goal(goal_id)
+    if not goal:
+        await update.message.reply_text(t(l, "error"))
+        return ConversationHandler.END
+
+    # Update target and re-evaluate completed flag
+    updated_goal = db.update_goal_target(goal_id, new_target, goal["current_amount"])
+
+    # Full recalc so all other goals stay consistent
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+    db.recalculate_all_goals(uid, conversion_rates)
+
+    # Re-fetch after recalc to show up-to-date progress
+    updated_goal = db.get_goal(goal_id)
+    pct = min(100, round(updated_goal["current_amount"] / updated_goal["target_amount"] * 100)) \
+          if updated_goal["target_amount"] else 0
+    status = ("✅ " + t(l, "goal_completed")) if updated_goal["completed"] else ""
+
+    await update.message.reply_text(
+        t(l, "goal_target_updated",
+          title=updated_goal["title"],
+          new_target=f"{updated_goal['target_amount']:,.2f}",
+          current=f"{updated_goal['current_amount']:,.2f}",
+          currency=updated_goal["currency"],
+          pct=pct,
+          status=status),
+        reply_markup=back_keyboard(uid, "menu_goals"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
 # ─────────────────── CONVERT GOAL CURRENCY ───────────────────
 
 async def goal_convert_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1474,6 +1571,20 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Edit goal target amount ──
+    goal_edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(goal_edit_start, pattern="^goal_edit$")],
+        states={
+            S_GOAL_SELECT_EDIT: [CallbackQueryHandler(goal_select_edit, pattern="^gedit_")],
+            S_GOAL_EDIT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_edit_amount)],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Delete goal ──
     goal_delete_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(goal_delete_start, pattern="^goal_delete$")],
@@ -1534,7 +1645,7 @@ def build_application() -> Application:
         stats_custom_conv,
         trans_delete_conv, trans_conv,
         account_add_conv, account_delete_conv,
-        goal_add_conv, goal_delete_conv, goal_convert_conv,
+        goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
     ]:
         app.add_handler(conv)
