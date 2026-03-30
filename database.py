@@ -358,6 +358,22 @@ def delete_goal(goal_id: int):
             cur.execute("DELETE FROM goals WHERE id=%s", (goal_id,))
 
 
+def update_goal_target(goal_id: int, new_target: float,
+                       current_amount: float) -> Dict:
+    """Update target_amount for a goal and re-evaluate completed flag."""
+    completed = current_amount >= new_target
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE goals "
+                "SET target_amount=%s, completed=%s "
+                "WHERE id=%s",
+                (round(new_target, 4), completed, goal_id)
+            )
+            cur.execute("SELECT * FROM goals WHERE id=%s", (goal_id,))
+            return _norm_goal(dict(cur.fetchone()))
+
+
 def update_goal_currency(goal_id: int, new_currency: str,
                          new_target: float, new_current: float):
     with get_connection() as conn:
