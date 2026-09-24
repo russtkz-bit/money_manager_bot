@@ -61,6 +61,16 @@ and re-running with a new `DB_PASSWORD` rotates the password (see below).
 | Narrow `pg_hba.conf` rule, not `0.0.0.0/0` | Even on localhost, scoping the rule to the exact db/user/address is defense in depth and makes the intent explicit for the next person reading the file |
 | Config backed up before editing | `sed`/`awk` mistakes are common; the script keeps a `*.bak.<timestamp>` copy of every file it touches |
 
+## About the port
+
+The script reads the cluster's actual port from its own `postgresql.conf`
+and uses that everywhere — it does not assume 5432. Debian/Ubuntu assigns
+each new PostgreSQL cluster the next free port starting at 5432, so if
+anything (an older cluster from an earlier attempt, a leftover process)
+already held 5432 when this cluster was created, it may genuinely be on
+5433 or higher. `DATABASE_URL` will reflect whichever port it actually
+found — check `pg_lsclusters` if a connection ever behaves unexpectedly.
+
 ## Rotating the password
 
 ```bash

@@ -69,6 +69,16 @@ fi
 echo "==> Using config: $PG_CONF"
 echo "==> Using config: $PG_HBA"
 
+# Debian/Ubuntu assigns each cluster the next free port starting from 5432 —
+# if a port was already taken (e.g. by another cluster, including one from
+# an earlier, since-removed attempt), this cluster can easily end up on
+# 5433+ instead. Read the real port from its own config rather than
+# assuming 5432, or every TCP connection below silently targets the wrong
+# server.
+PG_PORT="$(grep -E '^\s*port\s*=' "$PG_CONF" | tail -n1 | grep -oE '[0-9]+' || true)"
+PG_PORT="${PG_PORT:-5432}"
+echo "==> Cluster port: $PG_PORT"
+
 TIMESTAMP="$(date +%Y%m%d%H%M%S)"
 cp "$PG_CONF" "${PG_CONF}.bak.${TIMESTAMP}"
 cp "$PG_HBA"  "${PG_HBA}.bak.${TIMESTAMP}"
@@ -88,7 +98,7 @@ echo "==> Creating role and database (idempotent)…"
 # md5; without this SET, the role would get an md5-hashed password while
 # the pg_hba.conf rule below demands scram-sha-256 — auth then fails with
 # "password authentication failed" even though the password is correct.
-sudo -u postgres psql -v ON_ERROR_STOP=1 -v db_user="$DB_USER" -v db_pass="$DB_PASSWORD" -v db_name="$DB_NAME" <<'SQL'
+sudo -u postgres psql -p "$PG_PORT" -v ON_ERROR_STOP=1 -v db_user="$DB_USER" -v db_pass="$DB_PASSWORD" -v db_name="$DB_NAME" <<'SQL'
 SET password_encryption = 'scram-sha-256';
 
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_pass')
@@ -138,8 +148,8 @@ echo "==> Restarting PostgreSQL…"
 systemctl restart postgresql
 sleep 2
 
-echo "==> Verifying the new role can connect over TCP (127.0.0.1)…"
-if PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -c 'SELECT 1;' >/dev/null; then
+echo "==> Verifying the new role can connect over TCP (127.0.0.1:${PG_PORT})…"
+if PGPASSWORD="$DB_PASSWORD" psql -h 127.0.0.1 -p "$PG_PORT" -U "$DB_USER" -d "$DB_NAME" -c 'SELECT 1;' >/dev/null; then
   echo "==> Connection OK."
 else
   echo "!! Could not connect with the new role. Restoring backed-up configs and exiting." >&2
@@ -149,7 +159,7 @@ else
   exit 1
 fi
 
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@localhost:5432/${DB_NAME}"
+DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@localhost:${PG_PORT}/${DB_NAME}"
 
 umask 077
 {
@@ -166,6 +176,7 @@ cat <<EOF
 
  Role:      ${DB_USER}   (not a superuser, owns only its own DB)
  Database:  ${DB_NAME}
+ Port:      ${PG_PORT}
  Password:  saved to ${CREDS_FILE} (chmod 600)
 
  Next steps:
