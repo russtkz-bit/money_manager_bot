@@ -80,7 +80,17 @@ echo "==> Creating role and database (idempotent)…"
 # PL/pgSQL bodies — so role creation uses the same \gexec idiom as the
 # database creation below, and the password is (re-)set with a plain,
 # unconditional ALTER ROLE.
+#
+# SET password_encryption first: CREATE/ALTER ROLE ... PASSWORD hashes using
+# whatever value is active for *this session* right now, not whatever
+# postgresql.conf says on disk (that only takes effect after a reload, which
+# happens later in this script). Older Ubuntu/PostgreSQL versions default to
+# md5; without this SET, the role would get an md5-hashed password while
+# the pg_hba.conf rule below demands scram-sha-256 — auth then fails with
+# "password authentication failed" even though the password is correct.
 sudo -u postgres psql -v ON_ERROR_STOP=1 -v db_user="$DB_USER" -v db_pass="$DB_PASSWORD" -v db_name="$DB_NAME" <<'SQL'
+SET password_encryption = 'scram-sha-256';
+
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_pass')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'db_user')
 \gexec
