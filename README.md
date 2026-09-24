@@ -34,9 +34,19 @@ mkdir money_manager_bot && cd money_manager_bot
 
 ### 2. Install Dependencies
 
+On Debian/Ubuntu, the system Python is "externally managed" (PEP 668) and
+refuses a bare `pip install` — use a virtual environment instead of
+`--break-system-packages`, which risks the system's own Python tooling:
+
 ```bash
+sudo apt install -y python3-venv   # if not already present
+python3 -m venv venv
+source venv/bin/activate           # run this again in any new shell before using the bot
 pip install -r requirements.txt
 ```
+
+Everything below (`python bot.py`, the systemd service) assumes this venv is
+active or referenced directly, as shown.
 
 ### 3. Create Your Bot
 
@@ -67,7 +77,7 @@ cp .env.example .env
 ### 6. Run the Bot
 
 ```bash
-python bot.py
+venv/bin/python bot.py   # or: source venv/bin/activate && python bot.py
 ```
 
 ---
@@ -132,7 +142,7 @@ Type=simple
 User=your_user
 WorkingDirectory=/path/to/money_manager_bot
 EnvironmentFile=/path/to/money_manager_bot/.env
-ExecStart=/usr/bin/python3 /path/to/money_manager_bot/bot.py
+ExecStart=/path/to/money_manager_bot/venv/bin/python /path/to/money_manager_bot/bot.py
 Restart=always
 RestartSec=10
 
