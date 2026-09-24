@@ -51,6 +51,12 @@ automatically on startup — `schema.sql` is provided only as a reference for
 manual setup). Any Postgres instance works, including free hosted tiers
 (e.g. Railway, Supabase, Neon).
 
+Running it yourself on an Ubuntu Server instead? `deploy/setup_postgres.sh`
+installs and hardens a local, localhost-only PostgreSQL instance (dedicated
+non-superuser role, SCRAM auth, no network exposure) in one command — see
+[`deploy/POSTGRES_SETUP.md`](deploy/POSTGRES_SETUP.md) for details, backups,
+and password rotation.
+
 ### 5. Configure Environment
 
 ```bash
