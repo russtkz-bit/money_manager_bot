@@ -11,6 +11,13 @@ from typing import Optional, Dict
 from io import BytesIO
 
 from dotenv import load_dotenv
+
+# Must run before importing database: database.py reads DATABASE_URL from
+# the environment at *import time* (a module-level constant), so loading
+# .env after that import is too late — the constant is already bound to
+# None regardless of what .env contains.
+load_dotenv()
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -22,8 +29,6 @@ import database as db
 import currencies as cur
 import charts as ch
 from languages import t
-
-load_dotenv()
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

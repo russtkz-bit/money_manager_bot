@@ -39,14 +39,25 @@ else
 fi
 [[ -n "$TOKEN" ]] || { echo "No token given, aborting." >&2; exit 1; }
 
+CREDS_FOUND=0
 if [[ -n "${DATABASE_URL:-}" ]]; then
   DB_URL="$DATABASE_URL"
-elif [[ -f "$CREDS_FILE" ]]; then
-  DB_URL="$(grep -m1 '^DATABASE_URL=' "$CREDS_FILE" | cut -d= -f2-)"
-  echo "==> Using DATABASE_URL from ${CREDS_FILE} (written by setup_postgres.sh)."
 else
-  read -rsp "DATABASE_URL (postgresql://user:pass@host:5432/db, input hidden): " DB_URL
-  echo
+  # setup_postgres.sh writes this chmod 600 as root, and this script is
+  # normally run as the bot's own (non-root) user — a plain `[[ -f ]]` can't
+  # even see into /root in that case (silently reads as "not found", not an
+  # error), so try a direct read first and fall back to sudo before giving
+  # up and asking interactively. sudo's own password prompt goes straight
+  # to the terminal, so this stays interactive-safe.
+  CREDS_CONTENT="$( { cat "$CREDS_FILE" 2>/dev/null || sudo cat "$CREDS_FILE" 2>/dev/null; } || true )"
+  DB_URL="$(grep -m1 '^DATABASE_URL=' <<<"$CREDS_CONTENT" | cut -d= -f2-)" || true
+  if [[ -n "$DB_URL" ]]; then
+    CREDS_FOUND=1
+    echo "==> Using DATABASE_URL from ${CREDS_FILE} (written by setup_postgres.sh)."
+  else
+    read -rsp "DATABASE_URL (postgresql://user:pass@host:5432/db, input hidden): " DB_URL
+    echo
+  fi
 fi
 [[ -n "$DB_URL" ]] || { echo "No DATABASE_URL given, aborting." >&2; exit 1; }
 
@@ -58,7 +69,7 @@ umask 077
 chmod 600 "$ENV_FILE"
 
 echo "==> Wrote ${ENV_FILE} (chmod 600 — only $(whoami) can read it)."
-if [[ -f "$CREDS_FILE" ]]; then
+if [[ "$CREDS_FOUND" == "1" ]]; then
   echo "==> The token/password are now in ${ENV_FILE}. You can remove the"
-  echo "    standalone credentials file: rm ${CREDS_FILE}"
+  echo "    standalone credentials file: sudo rm ${CREDS_FILE}"
 fi
