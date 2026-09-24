@@ -41,14 +41,11 @@ It:
    not, it rolls the config files back automatically.
 7. Prints (and saves to a `chmod 600` file) the resulting connection string.
 
-At the end, copy the printed `DATABASE_URL` into the bot's `.env`:
-
-```
-DATABASE_URL=postgresql://money_manager_bot:<password>@localhost:5432/money_manager
-```
-
-then delete the credentials file the script wrote
-(`/root/money_manager_db_credentials.txt` by default) — once it's in
+At the end, run `./deploy/configure_env.sh` — it picks up the printed
+`DATABASE_URL` straight from the credentials file this script wrote
+(`/root/money_manager_db_credentials.txt` by default), asks only for the
+Telegram token, and writes a `chmod 600` `.env`. It also tells you when it's
+safe to delete the standalone credentials file — once the value is in
 `.env`, there's no reason for a second copy to exist on disk.
 
 Re-running the script is safe: it won't create duplicate roles/databases,

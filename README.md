@@ -69,9 +69,25 @@ and password rotation.
 
 ### 5. Configure Environment
 
+Neither the bot token nor the database URL are ever written into the code —
+both are read from environment variables (via `.env`, loaded by
+`python-dotenv`), and `.env` is gitignored so it can't end up committed.
+
+Recommended: `deploy/configure_env.sh` writes `.env` for you — it prompts
+for the Telegram token with input hidden (not echoed, not left in shell
+history), auto-picks up `DATABASE_URL` from the credentials file
+`deploy/setup_postgres.sh` wrote (if you used it), and sets `.env` to
+`chmod 600` so only your user can read it:
+
+```bash
+./deploy/configure_env.sh
+```
+
+Or by hand, if you prefer:
+
 ```bash
 cp .env.example .env
-# then fill in TELEGRAM_BOT_TOKEN and DATABASE_URL
+# then fill in TELEGRAM_BOT_TOKEN and DATABASE_URL, then: chmod 600 .env
 ```
 
 ### 6. Run the Bot
