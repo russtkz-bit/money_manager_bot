@@ -7,7 +7,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict
 from io import BytesIO
 
 from dotenv import load_dotenv
@@ -34,9 +34,11 @@ logger = logging.getLogger(__name__)
 # ─────────────────── CONVERSATION STATES ───────────────────
 (
     # Transaction flow
-    S_TRANS_TYPE, S_TRANS_AMOUNT, S_TRANS_CURRENCY,
+    # (no currency-picker state: a transaction's currency is locked to its
+    # account's currency, so account balances never mix currencies)
+    S_TRANS_TYPE, S_TRANS_AMOUNT,
     S_TRANS_CATEGORY, S_TRANS_DESC,
-    S_TRANS_ACCOUNT,          # new: select account before entering amount
+    S_TRANS_ACCOUNT,
 
     # Goal flow
     S_GOAL_TYPE, S_GOAL_TITLE, S_GOAL_AMOUNT,
@@ -59,7 +61,10 @@ logger = logging.getLogger(__name__)
     # Account flow
     S_ACCOUNT_TYPE, S_ACCOUNT_NAME, S_ACCOUNT_CURRENCY, S_ACCOUNT_BALANCE,
     S_ACCOUNT_SELECT_DELETE,
-) = range(25)
+
+    # Budget flow
+    S_BUDGET_CATEGORY, S_BUDGET_AMOUNT, S_BUDGET_SELECT_DELETE,
+) = range(27)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -68,6 +73,13 @@ CURRENCY_ROW_3 = ["BTC", "ETH", "SOL", "TON"]
 CURRENCY_ROW_4 = ["BNB", "XRP", "XAU", "XAG"]
 
 ACCOUNT_TYPE_EMOJI = {"bank": "🏦", "crypto": "₿", "cash": "💵"}
+
+# Canonical (language-independent) category keys. Translated only for display
+# via category_label() — this is what actually gets stored in the DB, so
+# switching language never orphans existing transactions/budgets.
+INCOME_CATEGORY_KEYS  = ["salary", "freelance", "investment", "gift", "other"]
+EXPENSE_CATEGORY_KEYS = ["food", "transport", "housing", "health",
+                         "entertainment", "loan_payment", "other"]
 
 
 def lang(uid: int) -> str:
@@ -82,9 +94,10 @@ def main_menu_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_transactions"), callback_data="menu_transactions"),
          InlineKeyboardButton(t(l, "btn_goals"),        callback_data="menu_goals")],
         [InlineKeyboardButton(t(l, "btn_accounts"),     callback_data="menu_accounts"),
-         InlineKeyboardButton(t(l, "btn_currencies"),   callback_data="menu_currencies")],
-        [InlineKeyboardButton(t(l, "btn_statistics"),   callback_data="menu_stats"),
-         InlineKeyboardButton(t(l, "btn_settings"),     callback_data="menu_settings")],
+         InlineKeyboardButton(t(l, "btn_budgets"),      callback_data="menu_budgets")],
+        [InlineKeyboardButton(t(l, "btn_currencies"),   callback_data="menu_currencies"),
+         InlineKeyboardButton(t(l, "btn_statistics"),   callback_data="menu_stats")],
+        [InlineKeyboardButton(t(l, "btn_settings"),     callback_data="menu_settings")],
     ])
 
 
@@ -107,6 +120,16 @@ def accounts_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_view_accounts"),  callback_data="account_view")],
         [InlineKeyboardButton(t(l, "btn_delete_account"), callback_data="account_delete")],
         [InlineKeyboardButton(t(l, "back"),               callback_data="back_main")],
+    ])
+
+
+def budgets_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "btn_set_budget"),    callback_data="budget_add")],
+        [InlineKeyboardButton(t(l, "btn_view_budgets"),  callback_data="budget_view")],
+        [InlineKeyboardButton(t(l, "btn_delete_budget"), callback_data="budget_delete")],
+        [InlineKeyboardButton(t(l, "back"),              callback_data="back_main")],
     ])
 
 
@@ -133,19 +156,44 @@ def currency_keyboard(callback_prefix: str, uid: int) -> InlineKeyboardMarkup:
 
 def category_keyboard(t_type: str, uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
-    if t_type == "income":
-        cats = ["cat_salary", "cat_freelance", "cat_investment", "cat_gift", "cat_other"]
-    else:
-        cats = [
-            "cat_food", "cat_transport", "cat_housing", "cat_health",
-            "cat_entertainment", "cat_loan_payment", "cat_other"
-        ]
+    cats = INCOME_CATEGORY_KEYS if t_type == "income" else EXPENSE_CATEGORY_KEYS
     rows = []
     for i in range(0, len(cats), 2):
-        row = [InlineKeyboardButton(t(l, cats[i]), callback_data=f"cat_{cats[i]}")]
+        row = [InlineKeyboardButton(t(l, f"cat_{cats[i]}"), callback_data=f"cat_{cats[i]}")]
         if i + 1 < len(cats):
-            row.append(InlineKeyboardButton(t(l, cats[i + 1]), callback_data=f"cat_{cats[i + 1]}"))
+            row.append(InlineKeyboardButton(t(l, f"cat_{cats[i + 1]}"), callback_data=f"cat_{cats[i + 1]}"))
         rows.append(row)
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def budget_category_keyboard(uid: int, existing_categories: set) -> InlineKeyboardMarkup:
+    """Category picker for budgets — expense categories only, marks ones that already have a budget."""
+    l = lang(uid)
+    rows = []
+    cats = EXPENSE_CATEGORY_KEYS
+    for i in range(0, len(cats), 2):
+        row = [InlineKeyboardButton(_budget_cat_btn_label(cats[i], l, existing_categories),
+                                     callback_data=f"bcat_{cats[i]}")]
+        if i + 1 < len(cats):
+            row.append(InlineKeyboardButton(_budget_cat_btn_label(cats[i + 1], l, existing_categories),
+                                             callback_data=f"bcat_{cats[i + 1]}"))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _budget_cat_btn_label(key: str, l: str, existing_categories: set) -> str:
+    mark = "✅ " if key in existing_categories else ""
+    return mark + t(l, f"cat_{key}")
+
+
+def budgets_select_keyboard(budgets: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for b in budgets:
+        label = f"{category_label(b['category'], l)} — {b['amount']:,.2f} {b['currency']}"
+        rows.append([InlineKeyboardButton(label, callback_data=f"bdel_{b['id']}")])
     rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
     return InlineKeyboardMarkup(rows)
 
@@ -210,6 +258,7 @@ def stats_period_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "stats_period_6m"),     callback_data="stats_p_6m"),
          InlineKeyboardButton(t(l, "stats_period_year"),   callback_data="stats_p_year")],
         [InlineKeyboardButton(t(l, "stats_period_custom"), callback_data="stats_p_custom")],
+        [InlineKeyboardButton(t(l, "stats_recurring"),     callback_data="stats_recurring")],
         [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
     ])
 
@@ -295,6 +344,61 @@ def _account_type_label(account_type: str, l: str) -> str:
     return t(l, key_map.get(account_type, "account_type_bank"))
 
 
+def _month_bounds() -> tuple:
+    today = datetime.now().date()
+    start = today.replace(day=1)
+    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+def _spent_this_month(uid: int, category_key: str, target_currency: str,
+                       conversion_rates: dict) -> float:
+    """Sum this calendar month's expenses in `category_key`, converted to target_currency."""
+    start, end = _month_bounds()
+    txns  = db.get_transactions_filtered(uid, start, end)
+    fiat   = conversion_rates.get("fiat", {})
+    crypto = conversion_rates.get("crypto", {})
+    metals = conversion_rates.get("metals", {})
+    total = 0.0
+    for tx in txns:
+        if tx["type"] != "expense" or tx["category"] != category_key:
+            continue
+        conv = cur.convert_amount(tx["amount"], tx["currency"], target_currency, fiat, crypto, metals)
+        if conv is not None:
+            total += conv
+        elif tx["currency"] == target_currency:
+            total += tx["amount"]
+    return total
+
+
+def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l: str) -> str:
+    """Returns an extra message chunk warning about budget overspend, or ''."""
+    budget = db.get_budget_by_category(uid, category_key)
+    if not budget or not budget["amount"]:
+        return ""
+    spent = _spent_this_month(uid, category_key, budget["currency"], conversion_rates)
+    pct   = spent / budget["amount"] * 100
+    cat   = category_label(category_key, l)
+    fmt_args = dict(category=cat, spent=f"{spent:,.2f}",
+                    amount=f"{budget['amount']:,.2f}", currency=budget["currency"],
+                    pct=round(pct))
+    if spent >= budget["amount"]:
+        return "\n\n" + t(l, "budget_exceeded", **fmt_args)
+    if pct >= 80:
+        return "\n\n" + t(l, "budget_near_limit", **fmt_args)
+    return ""
+
+
+def category_label(category_key: str, l: str) -> str:
+    """Translate a canonical category key (e.g. 'food') into a display label.
+
+    Falls back to returning the value unchanged for anything that isn't a
+    known key — covers transactions/budgets recorded before this bot stored
+    canonical keys, when the category text itself was already the label.
+    """
+    label = t(l, f"cat_{category_key}")
+    return category_key if label == f"cat_{category_key}" else label
+
+
 # ─────────────────── START / WELCOME ───────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -351,6 +455,14 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=accounts_keyboard(uid),
             parse_mode=ParseMode.MARKDOWN
         )
+    elif query.data == "menu_budgets":
+        await query.edit_message_text(
+            t(l, "budgets_menu_header"),
+            reply_markup=budgets_keyboard(uid),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    elif query.data == "budget_view":
+        await handle_view_budgets(update, context)
     elif query.data == "menu_goals":
         await query.edit_message_text(
             t(l, "btn_goals"),
@@ -447,18 +559,40 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     query = update.callback_query
     await query.edit_message_text(t(l, "stats_generating"), parse_mode=ParseMode.MARKDOWN)
 
-    stats = db.get_statistics_filtered(uid, start_date, end_date)
     txns  = db.get_transactions_filtered(uid, start_date, end_date)
     goals = db.get_goals(uid)
 
-    total_income  = sum(stats["income"].values())
-    total_expense = sum(stats["expense"].values())
-    balance       = total_income - total_expense
+    # Transactions can be in different currencies (one per account), so
+    # totals and the category breakdown are converted into the user's base
+    # currency before summing — adding raw amounts across currencies would
+    # otherwise produce a meaningless number.
+    base_currency = db.get_user_base_currency(uid)
+    fiat, crypto, metals = {}, {}, {}
+    try:
+        fiat, crypto, metals = await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    total_income  = 0.0
+    total_expense = 0.0
+    by_cat: Dict[str, float] = {}
+    txns_base: list = []   # same transactions, amounts converted to base_currency (for the bar chart)
+    for tx in txns:
+        conv = cur.convert_amount(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        amt  = conv if conv is not None else (tx["amount"] if tx["currency"] == base_currency else 0.0)
+        if tx["type"] == "income":
+            total_income += amt
+        else:
+            total_expense += amt
+            label = category_label(tx["category"], l)
+            by_cat[label] = by_cat.get(label, 0) + amt
+        txns_base.append({**tx, "amount": amt, "currency": base_currency})
+    balance = total_income - total_expense
 
     summary  = t(l, "stats_period_header", period=period_label)
-    summary += t(l, "stats_balance", balance=f"{balance:,.2f}", currency="")
-    summary += t(l, "stats_income",  amount=f"{total_income:,.2f}",  currency="")
-    summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency="")
+    summary += t(l, "stats_balance", balance=f"{balance:,.2f}", currency=base_currency)
+    summary += t(l, "stats_income",  amount=f"{total_income:,.2f}",  currency=base_currency)
+    summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency=base_currency)
     if not txns:
         summary += "\n" + t(l, "stats_no_data_period")
 
@@ -481,7 +615,6 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
         except Exception as e:
             logger.warning(f"Goals chart failed: {e}")
 
-    by_cat = stats.get("by_category", {})
     if "pie" in chart_types and by_cat:
         try:
             img = ch.generate_pie_chart(by_cat, title=t(l, "chart_pie_title"))
@@ -498,7 +631,7 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     if "bar" in chart_types and txns:
         try:
             img = ch.generate_bar_chart(
-                txns, bar_period,
+                txns_base, bar_period,
                 income_label=t(l, "income"),
                 expense_label=t(l, "expense"),
                 title=t(l, "chart_bar_title"),
@@ -534,6 +667,94 @@ async def cb_back_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     await send_main_menu(update, uid, edit=True)
+
+
+def _detect_recurring(txns: list, base_currency: str,
+                      fiat: dict, crypto: dict, metals: dict,
+                      min_months: int = 2) -> list:
+    """
+    Heuristic recurring-expense detector: groups expenses by category, and
+    flags a category as recurring when it has spending in at least
+    `min_months` distinct calendar months. Returns a list of
+    {category, avg_amount, months, last_date} sorted by avg_amount desc.
+
+    This is a lightweight stand-in for PocketSmith's recurring-transaction /
+    cash-flow forecast — good enough to spot subscriptions, rent, etc.
+    without needing merchant-level matching.
+    """
+    by_cat: Dict[str, dict] = {}
+    for tx in txns:
+        if tx["type"] != "expense":
+            continue
+        conv = cur.convert_amount(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        amt  = conv if conv is not None else (tx["amount"] if tx["currency"] == base_currency else 0.0)
+        date_str = (tx.get("created_at") or "")[:10]
+        month    = date_str[:7]
+        cat      = tx["category"]
+        entry    = by_cat.setdefault(cat, {"amounts": [], "months": set(), "last_date": date_str})
+        entry["amounts"].append(amt)
+        if month:
+            entry["months"].add(month)
+        if date_str > entry["last_date"]:
+            entry["last_date"] = date_str
+
+    recurring = []
+    for cat, entry in by_cat.items():
+        if len(entry["months"]) < min_months:
+            continue
+        avg = sum(entry["amounts"]) / len(entry["months"])
+        recurring.append({
+            "category": cat,
+            "avg_amount": avg,
+            "months": len(entry["months"]),
+            "last_date": entry["last_date"],
+        })
+    recurring.sort(key=lambda r: r["avg_amount"], reverse=True)
+    return recurring
+
+
+async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    await query.edit_message_text(t(l, "stats_generating"), parse_mode=ParseMode.MARKDOWN)
+
+    base_currency = db.get_user_base_currency(uid)
+    fiat, crypto, metals = {}, {}, {}
+    try:
+        fiat, crypto, metals = await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    # Look back 90 days — enough to catch monthly recurring spend in ~3 cycles.
+    since = (datetime.now().date() - timedelta(days=89)).strftime("%Y-%m-%d")
+    txns  = db.get_transactions_filtered(uid, since)
+    recurring = _detect_recurring(txns, base_currency, fiat, crypto, metals)
+
+    if not recurring:
+        await query.edit_message_text(
+            t(l, "no_recurring"),
+            reply_markup=back_keyboard(uid, "back_stats"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    text = t(l, "recurring_header")
+    total = 0.0
+    for r in recurring:
+        total += r["avg_amount"]
+        text += t(l, "recurring_line",
+                  category=category_label(r["category"], l),
+                  amount=f"{r['avg_amount']:,.2f}", currency=base_currency,
+                  months=r["months"], last_date=r["last_date"])
+    text += t(l, "recurring_forecast", amount=f"{total:,.2f}", currency=base_currency)
+
+    await query.edit_message_text(
+        text,
+        reply_markup=back_keyboard(uid, "back_stats"),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def cb_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -669,7 +890,7 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         text    += t(l, "transaction_line",
                      emoji=emoji, date=date_str,
                      amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
-                     category=tx["category"], account=account, description=desc)
+                     category=category_label(tx["category"], l), account=account, description=desc)
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await query.edit_message_text(
@@ -927,6 +1148,144 @@ async def account_select_delete(update: Update, context: ContextTypes.DEFAULT_TY
     return ConversationHandler.END
 
 
+# ─────────────────── BUDGETS ───────────────────
+
+async def handle_view_budgets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query   = update.callback_query
+    uid     = query.from_user.id
+    l       = lang(uid)
+    budgets = db.get_budgets(uid)
+    if not budgets:
+        await query.edit_message_text(
+            t(l, "no_budgets"),
+            reply_markup=back_keyboard(uid, "menu_budgets"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    await query.edit_message_text(t(l, "fetching_rates"), parse_mode=ParseMode.MARKDOWN)
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    try:
+        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+            await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    text = t(l, "budgets_header")
+    for b in budgets:
+        spent = _spent_this_month(uid, b["category"], b["currency"], conversion_rates)
+        pct   = min(999, round(spent / b["amount"] * 100)) if b["amount"] else 0
+        bar   = _progress_bar(pct)
+        text += t(l, "budget_line",
+                  category=category_label(b["category"], l),
+                  spent=f"{spent:,.2f}", amount=f"{b['amount']:,.2f}",
+                  currency=b["currency"], pct=pct, bar=bar)
+
+    await query.edit_message_text(
+        text,
+        reply_markup=back_keyboard(uid, "menu_budgets"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+def _progress_bar(pct: int, length: int = 10) -> str:
+    filled = min(length, round(pct / 100 * length))
+    return "🟥" * filled + "⬜" * (length - filled) if pct >= 100 else "🟩" * filled + "⬜" * (length - filled)
+
+
+# ─── Add / update budget conversation ───
+
+async def budget_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    existing = {b["category"] for b in db.get_budgets(uid)}
+    await query.edit_message_text(
+        t(l, "choose_budget_category"),
+        reply_markup=budget_category_keyboard(uid, existing),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_BUDGET_CATEGORY
+
+
+async def budget_category_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    cat_key  = query.data[len("bcat_"):]
+    context.user_data["budget_category"] = cat_key
+    await query.edit_message_text(
+        t(l, "enter_budget_amount", category=category_label(cat_key, l)),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_BUDGET_AMOUNT
+
+
+async def budget_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    try:
+        amount = float(update.message.text.replace(",", "."))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t(l, "invalid_amount"))
+        return S_BUDGET_AMOUNT
+
+    cat_key  = context.user_data.get("budget_category")
+    currency = db.get_user_base_currency(uid)
+    db.set_budget(uid, cat_key, amount, currency)
+
+    await update.message.reply_text(
+        t(l, "budget_saved",
+          category=category_label(cat_key, l),
+          amount=f"{amount:,.2f}", currency=currency),
+        reply_markup=back_keyboard(uid, "menu_budgets"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
+# ─── Delete budget conversation ───
+
+async def budget_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query   = update.callback_query
+    await query.answer()
+    uid     = query.from_user.id
+    l       = lang(uid)
+    budgets = db.get_budgets(uid)
+    if not budgets:
+        await query.edit_message_text(
+            t(l, "no_budgets"),
+            reply_markup=back_keyboard(uid, "menu_budgets"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_budget_to_delete"),
+        reply_markup=budgets_select_keyboard(budgets, uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_BUDGET_SELECT_DELETE
+
+
+async def budget_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query      = update.callback_query
+    await query.answer()
+    uid        = query.from_user.id
+    l          = lang(uid)
+    budget_id  = int(query.data.split("_")[1])
+    db.delete_budget(budget_id)
+    await query.edit_message_text(
+        t(l, "budget_deleted"),
+        reply_markup=back_keyboard(uid, "menu_budgets"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
 # ─────────────────── ADD TRANSACTION ───────────────────
 
 async def trans_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -995,24 +1354,12 @@ async def trans_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t(l, "invalid_amount"))
         return S_TRANS_AMOUNT
     context.user_data["trans_amount"] = amount
-    # Pre-select account currency but let user change
-    await update.message.reply_text(
-        t(l, "enter_currency"),
-        reply_markup=currency_keyboard("tcur", uid),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    return S_TRANS_CURRENCY
-
-
-async def trans_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid   = query.from_user.id
-    l     = lang(uid)
-    chosen = query.data.split("_", 1)[1]
-    context.user_data["trans_currency"] = chosen
+    # A transaction's currency is always its account's currency — this keeps
+    # account balances (a plain sum of transaction amounts) meaningful, and
+    # skips an extra tap since we already know the account.
+    context.user_data["trans_currency"] = context.user_data.get("trans_account_currency", "USD")
     t_type = context.user_data.get("trans_type", "expense")
-    await query.edit_message_text(
+    await update.message.reply_text(
         t(l, "enter_category"),
         reply_markup=category_keyboard(t_type, uid),
         parse_mode=ParseMode.MARKDOWN
@@ -1025,9 +1372,8 @@ async def trans_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     uid        = query.from_user.id
     l          = lang(uid)
-    cat_name_key = query.data[4:]       # "cat_cat_food" → "cat_food"
-    cat_name     = t(l, cat_name_key)
-    context.user_data["trans_category"] = cat_name
+    cat_key    = query.data[len("cat_"):]     # "cat_food" → "food"
+    context.user_data["trans_category"] = cat_key
     await query.edit_message_text(t(l, "enter_description"), parse_mode=ParseMode.MARKDOWN)
     return S_TRANS_DESC
 
@@ -1067,7 +1413,7 @@ async def trans_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      account=acc_name,
                      amount=f"{ud['trans_amount']:,.2f}",
                      currency=ud["trans_currency"],
-                     category=ud["trans_category"],
+                     category=category_label(ud["trans_category"], l),
                      description=desc or "—")
 
     if updated_goals:
@@ -1075,6 +1421,9 @@ async def trans_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for goal in updated_goals:
             status        = "✅ " + t(l, "goal_completed") if goal["completed"] else ""
             message_text += f"\n• {goal['title']}: {goal['current_amount']:,.2f}/{goal['target_amount']:,.2f} {goal['currency']} {status}"
+
+    if t_type == "expense":
+        message_text += _budget_warning_text(uid, ud["trans_category"], conversion_rates, l)
 
     await update.message.reply_text(
         message_text,
@@ -1502,9 +1851,6 @@ def build_application() -> Application:
             S_TRANS_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, trans_amount),
             ],
-            S_TRANS_CURRENCY: [
-                CallbackQueryHandler(trans_currency, pattern="^tcur_"),
-            ],
             S_TRANS_CATEGORY: [
                 CallbackQueryHandler(trans_category, pattern="^cat_"),
             ],
@@ -1543,6 +1889,33 @@ def build_application() -> Application:
             S_ACCOUNT_SELECT_DELETE: [
                 CallbackQueryHandler(account_select_delete, pattern="^adel_")
             ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Add / update budget ──
+    budget_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(budget_add_start, pattern="^budget_add$")],
+        states={
+            S_BUDGET_CATEGORY: [CallbackQueryHandler(budget_category_chosen, pattern="^bcat_")],
+            S_BUDGET_AMOUNT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, budget_amount_entered)],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Delete budget ──
+    budget_delete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(budget_delete_start, pattern="^budget_delete$")],
+        states={
+            S_BUDGET_SELECT_DELETE: [CallbackQueryHandler(budget_select_delete, pattern="^bdel_")],
         },
         fallbacks=[
             CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
@@ -1645,6 +2018,7 @@ def build_application() -> Application:
         stats_custom_conv,
         trans_delete_conv, trans_conv,
         account_add_conv, account_delete_conv,
+        budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
     ]:
@@ -1658,9 +2032,9 @@ def build_application() -> Application:
 
     app.add_handler(CallbackQueryHandler(
         cb_main_menu,
-        pattern="^(back_main|menu_transactions|menu_goals|menu_accounts|menu_currencies|"
+        pattern="^(back_main|menu_transactions|menu_goals|menu_accounts|menu_budgets|menu_currencies|"
                 "menu_stats|menu_settings|settings_language|"
-                "trans_view|trans_clear|goal_view|account_view)$"
+                "trans_view|trans_clear|goal_view|account_view|budget_view)$"
     ))
 
     app.add_handler(CallbackQueryHandler(cb_back_stats,               pattern="^back_stats$"))
@@ -1668,6 +2042,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(cb_main_menu,                pattern="^back_transactions$"))
 
     app.add_handler(CallbackQueryHandler(cb_stats_period,    pattern="^stats_p_(week|month|6m|year)$"))
+    app.add_handler(CallbackQueryHandler(cb_stats_recurring, pattern="^stats_recurring$"))
     app.add_handler(CallbackQueryHandler(cb_schrt_toggle,    pattern="^schrt_toggle_"))
     app.add_handler(CallbackQueryHandler(cb_schrt_generate,  pattern="^schrt_generate$"))
 

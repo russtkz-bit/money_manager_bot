@@ -1,6 +1,9 @@
 # 💰 Money Manager Telegram Bot
 
-A fully-featured personal finance Telegram bot with real-time currency tracking, income/expense tracking, and financial goal management. Supports **English** and **Russian** languages.
+A personal finance Telegram bot: multiple accounts, income/expense tracking,
+category budgets with overspend warnings, savings/repayment goals, live
+currency rates, statistics with charts, and simple recurring-expense
+detection. Supports **English** and **Russian** languages.
 
 ---
 
@@ -8,10 +11,13 @@ A fully-featured personal finance Telegram bot with real-time currency tracking,
 
 | Feature | Description |
 |---|---|
-| 💸 **Transactions** | Add income/expense with category, currency, and description |
-| 🎯 **Goals** | Set savings or loan repayment goals with deadlines |
+| 🏦 **Accounts** | Track balances across bank cards, crypto exchanges, and cash — each with its own currency |
+| 💸 **Transactions** | Add income/expense per account, with category and description |
+| 📐 **Budgets** | Set a monthly limit per category; get warned in-chat when you're near or over it |
+| 🎯 **Goals** | Set savings or loan repayment goals with deadlines, tracked against your account balances |
+| 🔁 **Recurring & Forecast** | Detects expenses that repeat month over month and estimates next month's recurring spend |
 | 💱 **Live Currencies** | Real-time rates: fiat, crypto (BTC/ETH/SOL/TON…), gold & silver |
-| 📊 **Statistics** | Balance, income/expense totals, breakdown by category |
+| 📊 **Statistics** | Balance, income/expense totals and category breakdown — converted into your base currency, with charts |
 | 🌐 **Bilingual** | Full English 🇬🇧 and Russian 🇷🇺 support |
 | 💱 **Goal Currency Converter** | Convert goal amounts between any supported currency in real-time |
 
@@ -38,14 +44,18 @@ pip install -r requirements.txt
 2. Send `/newbot` and follow the prompts
 3. Copy the **Bot Token** you receive
 
-### 4. Get Your API Keys
+### 4. Set Up a Database
 
-- **Telegram Bot Token** — from BotFather (step above)
+The bot stores everything in **PostgreSQL** (schema is created/migrated
+automatically on startup — `schema.sql` is provided only as a reference for
+manual setup). Any Postgres instance works, including free hosted tiers
+(e.g. Railway, Supabase, Neon).
 
 ### 5. Configure Environment
 
 ```bash
 cp .env.example .env
+# then fill in TELEGRAM_BOT_TOKEN and DATABASE_URL
 ```
 
 ### 6. Run the Bot
@@ -61,13 +71,13 @@ python bot.py
 ```
 money_manager_bot/
 ├── bot.py              # Main bot logic & Telegram handlers
-├── database.py         # SQLite database (users, transactions, goals)
+├── database.py         # PostgreSQL access layer (users, accounts, transactions, budgets, goals)
 ├── languages.py        # EN/RU translations
 ├── currencies.py       # Live currency/crypto/metals fetching
-├── ai_assistant.py     # Anthropic AI with web search integration
+├── charts.py           # Chart generation (goals, category pie, income/expense bar)
+├── schema.sql          # Reference schema — the source of truth is database.init_db()
 ├── requirements.txt    # Python dependencies
-├── .env.example        # Environment variable template
-└── money_manager.db    # SQLite database (auto-created on first run)
+└── .env.example        # Environment variable template
 ```
 
 ---
@@ -134,10 +144,9 @@ sudo systemctl status money-bot
 
 ## 📝 Notes
 
-- The database (`money_manager.db`) is created automatically on first run
-- AI features require a valid Anthropic API key; the bot works without it, but AI features will show an error message
+- The database schema is created/migrated automatically on first run — see `database.init_db()`
 - Currency rates are fetched live on demand — no caching, always fresh
-- The bot stores all data locally in SQLite
+- A transaction's currency is always its account's currency, so account balances never mix currencies; amounts are converted to your base currency for statistics, budgets, and the recurring-spend forecast
 
 ---
 

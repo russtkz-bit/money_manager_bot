@@ -20,6 +20,7 @@ LANGUAGES = {
         "btn_statistics": "📊 Statistics",
         "btn_settings": "⚙️ Settings",
         "btn_accounts": "🏦 Accounts",
+        "btn_budgets": "📐 Budgets",
         "btn_add_income": "➕ Add Income",
         "btn_add_expense": "➖ Add Expense",
         "btn_view_transactions": "📋 View Transactions",
@@ -50,6 +51,22 @@ LANGUAGES = {
         "choose_account_to_delete": "Choose an account to delete:\n\n⚠️ All transactions linked to it will be unlinked.",
         "account_deleted": "🗑️ Account deleted.",
         "choose_account_for_transaction": "🏦 Choose account for this transaction:",
+
+        # Budgets
+        "budgets_menu_header": "📐 *Budgets*\n\nSet a monthly spending limit per category and get warned before you blow it.",
+        "btn_set_budget": "➕ Set Budget",
+        "btn_view_budgets": "📋 View Budgets",
+        "btn_delete_budget": "🗑️ Delete Budget",
+        "no_budgets": "📭 No budgets set yet.",
+        "choose_budget_category": "🏷️ Choose a category to budget for:\n_(✅ = already has a budget, will be replaced)_",
+        "enter_budget_amount": "💵 Enter the *monthly* budget amount for *{category}*\n_(in your base currency)_:",
+        "budget_saved": "✅ Budget set!\n\n*{category}*: {amount} {currency} / month",
+        "budgets_header": "📐 *Your Monthly Budgets:*\n\n",
+        "budget_line": "*{category}*\n{bar} {pct}%\nSpent: `{spent} / {amount} {currency}`\n\n",
+        "choose_budget_to_delete": "🗑 Choose a budget to delete:",
+        "budget_deleted": "🗑️ Budget deleted.",
+        "budget_exceeded": "🚨 *Budget exceeded!*\n{category}: {spent}/{amount} {currency} ({pct}% this month)",
+        "budget_near_limit": "⚠️ *Budget warning:* {category} is at {pct}% ({spent}/{amount} {currency} this month)",
 
         # Transactions
         "choose_transaction_type": "Choose transaction type:",
@@ -146,6 +163,13 @@ LANGUAGES = {
         "stats_invalid_date":     "⚠️ Invalid date. Use format YYYY-MM-DD (e.g. 2024-01-15).",
         "stats_end_before_start": "⚠️ End date must be after start date.",
 
+        # Recurring / forecast
+        "stats_recurring": "🔁 Recurring & Forecast",
+        "no_recurring": "📭 No recurring expenses detected yet.\n\n_(needs spending in the same category across at least 2 of the last 3 months)_",
+        "recurring_header": "🔁 *Recurring Expenses*\n_(detected from your last 90 days)_\n\n",
+        "recurring_line": "*{category}*: ~{amount} {currency}/mo\n_seen in {months} months, last on {last_date}_\n\n",
+        "recurring_forecast": "📊 *Estimated recurring spend next month:* {amount} {currency}",
+
         # Chart captions / titles
         "chart_goals_title":   "Goals Progress",
         "chart_goals_caption": "🎯 *Goal Progress*",
@@ -176,6 +200,7 @@ LANGUAGES = {
         "btn_statistics": "📊 Статистика",
         "btn_settings": "⚙️ Настройки",
         "btn_accounts": "🏦 Счета",
+        "btn_budgets": "📐 Бюджеты",
         "btn_add_income": "➕ Добавить доход",
         "btn_add_expense": "➖ Добавить расход",
         "btn_view_transactions": "📋 История транзакций",
@@ -206,6 +231,22 @@ LANGUAGES = {
         "choose_account_to_delete": "Выберите счёт для удаления:\n\n⚠️ Все транзакции, привязанные к нему, будут отвязаны.",
         "account_deleted": "🗑️ Счёт удалён.",
         "choose_account_for_transaction": "🏦 Выберите счёт для этой транзакции:",
+
+        # Budgets
+        "budgets_menu_header": "📐 *Бюджеты*\n\nУстановите месячный лимит расходов по категории и получайте предупреждение, когда приближаетесь к нему.",
+        "btn_set_budget": "➕ Установить бюджет",
+        "btn_view_budgets": "📋 Мои бюджеты",
+        "btn_delete_budget": "🗑️ Удалить бюджет",
+        "no_budgets": "📭 Бюджетов пока нет.",
+        "choose_budget_category": "🏷️ Выберите категорию для бюджета:\n_(✅ = бюджет уже есть, будет заменён)_",
+        "enter_budget_amount": "💵 Введите *месячный* лимит бюджета для *{category}*\n_(в вашей базовой валюте)_:",
+        "budget_saved": "✅ Бюджет установлен!\n\n*{category}*: {amount} {currency} / месяц",
+        "budgets_header": "📐 *Ваши месячные бюджеты:*\n\n",
+        "budget_line": "*{category}*\n{bar} {pct}%\nПотрачено: `{spent} / {amount} {currency}`\n\n",
+        "choose_budget_to_delete": "🗑 Выберите бюджет для удаления:",
+        "budget_deleted": "🗑️ Бюджет удалён.",
+        "budget_exceeded": "🚨 *Бюджет превышен!*\n{category}: {spent}/{amount} {currency} ({pct}% за этот месяц)",
+        "budget_near_limit": "⚠️ *Внимание, бюджет:* {category} — {pct}% ({spent}/{amount} {currency} за этот месяц)",
 
         # Transactions
         "choose_transaction_type": "Выберите тип транзакции:",
@@ -306,6 +347,13 @@ LANGUAGES = {
         "stats_enter_end_date":   "📅 Введите *конечную дату* (ГГГГ-ММ-ДД):",
         "stats_invalid_date":     "⚠️ Неверный формат даты. Используйте ГГГГ-ММ-ДД (например, 2024-01-15).",
         "stats_end_before_start": "⚠️ Конечная дата должна быть позже начальной.",
+
+        # Регулярные платежи / прогноз
+        "stats_recurring": "🔁 Регулярные платежи и прогноз",
+        "no_recurring": "📭 Регулярные платежи пока не обнаружены.\n\n_(нужны траты в одной категории минимум в 2 из последних 3 месяцев)_",
+        "recurring_header": "🔁 *Регулярные расходы*\n_(за последние 90 дней)_\n\n",
+        "recurring_line": "*{category}*: ~{amount} {currency}/мес\n_встречалось {months} мес., последний раз {last_date}_\n\n",
+        "recurring_forecast": "📊 *Прогноз регулярных расходов на следующий месяц:* {amount} {currency}",
 
         # Подписи к графикам
         "chart_goals_title":   "Прогресс целей",
