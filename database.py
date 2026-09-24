@@ -73,6 +73,8 @@ def init_db():
                 );
                 CREATE INDEX IF NOT EXISTS idx_transactions_user_date
                     ON transactions (user_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_transactions_user_category
+                    ON transactions (user_id, category);
 
                 CREATE TABLE IF NOT EXISTS goals (
                     id             BIGSERIAL PRIMARY KEY,
@@ -87,6 +89,17 @@ def init_db():
                     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_goals_user ON goals (user_id);
+
+                CREATE TABLE IF NOT EXISTS budgets (
+                    id          BIGSERIAL PRIMARY KEY,
+                    user_id     BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    category    TEXT   NOT NULL,
+                    amount      NUMERIC(18,4) NOT NULL,
+                    currency    TEXT   NOT NULL DEFAULT 'USD',
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (user_id, category)
+                );
+                CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets (user_id);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -119,6 +132,13 @@ def _norm_tx(d: dict) -> dict:
 
 def _norm_account(d: dict) -> dict:
     d["initial_balance"] = float(d["initial_balance"])
+    if d.get("created_at") is not None:
+        d["created_at"] = str(d["created_at"])
+    return d
+
+
+def _norm_budget(d: dict) -> dict:
+    d["amount"] = float(d["amount"])
     if d.get("created_at") is not None:
         d["created_at"] = str(d["created_at"])
     return d
@@ -518,6 +538,59 @@ def calculate_initial_goal_amount(user_id: int,
                         balance, acc["currency"], goal_currency, conversion_rates
                     )
     return round(total, 4)
+
+
+# ──────────────── BUDGETS ────────────────
+
+def set_budget(user_id: int, category: str, amount: float, currency: str) -> int:
+    """Create or update this user's monthly budget for a category (upsert)."""
+    ensure_user(user_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO budgets (user_id, category, amount, currency) "
+                "VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT (user_id, category) "
+                "DO UPDATE SET amount=EXCLUDED.amount, currency=EXCLUDED.currency "
+                "RETURNING id",
+                (user_id, category, round(amount, 4), currency)
+            )
+            return cur.fetchone()["id"]
+
+
+def get_budgets(user_id: int) -> List[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM budgets WHERE user_id=%s ORDER BY created_at ASC",
+                (user_id,)
+            )
+            return [_norm_budget(dict(r)) for r in cur.fetchall()]
+
+
+def get_budget(budget_id: int) -> Optional[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM budgets WHERE id=%s", (budget_id,))
+            row = cur.fetchone()
+            return _norm_budget(dict(row)) if row else None
+
+
+def get_budget_by_category(user_id: int, category: str) -> Optional[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM budgets WHERE user_id=%s AND category=%s",
+                (user_id, category)
+            )
+            row = cur.fetchone()
+            return _norm_budget(dict(row)) if row else None
+
+
+def delete_budget(budget_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM budgets WHERE id=%s", (budget_id,))
 
 
 # ──────────────── FILTERED QUERIES (statistics) ────────────────
