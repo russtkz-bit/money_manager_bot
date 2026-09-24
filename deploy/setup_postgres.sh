@@ -32,6 +32,25 @@
 
 set -euo pipefail
 
+# Percent-encodes a value for safe use inside a postgresql:// URI. Without
+# this, a password containing '%' makes psycopg2/libpq's URI parser raise
+# "invalid dsn: invalid percent-encoded token"; '@', ':', '/', or '#'
+# instead get silently misread as the start of the host/port/db-name
+# section (e.g. a password of "pa/ss" truncates itself at the '/' with no
+# error at all) — a real risk for any user-supplied DB_PASSWORD.
+urlencode() {
+  local string="$1" length=${#1} c hex encoded=""
+  for (( i = 0; i < length; i++ )); do
+    c="${string:i:1}"
+    case "$c" in
+      [a-zA-Z0-9.~_-]) encoded+="$c" ;;
+      *) printf -v hex '%%%02X' "'$c"
+         encoded+="$hex" ;;
+    esac
+  done
+  printf '%s' "$encoded"
+}
+
 DB_NAME="${DB_NAME:-money_manager}"
 DB_USER="${DB_USER:-money_manager_bot}"
 DB_PASSWORD="${DB_PASSWORD:-}"
@@ -159,7 +178,7 @@ else
   exit 1
 fi
 
-DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@localhost:${PG_PORT}/${DB_NAME}"
+DATABASE_URL="postgresql://$(urlencode "$DB_USER"):$(urlencode "$DB_PASSWORD")@localhost:${PG_PORT}/$(urlencode "$DB_NAME")"
 
 umask 077
 {
