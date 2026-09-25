@@ -27,8 +27,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+import currencies as cur
 import database as db
+import finance
 from languages import t as translate
+
+ACCOUNT_TYPE_EMOJI = {"bank": "🏦", "crypto": "₿", "cash": "💵"}
+ACCOUNT_TYPE_KEY = {"bank": "account_type_bank", "crypto": "account_type_crypto", "cash": "account_type_cash"}
 
 SESSION_SECRET = os.getenv("SESSION_SECRET")
 if not SESSION_SECRET:
@@ -105,9 +110,30 @@ async def logout(request: Request):
     return RedirectResponse("/login", status_code=303)
 
 
-# ─────────────────── DASHBOARD (placeholder — filled in next) ───────────────────
+# ─────────────────── DASHBOARD ───────────────────
 
 @app.get("/")
 async def dashboard(request: Request):
     user_id = require_user(request)
-    return render(request, "dashboard.html", active="dashboard")
+    base_currency = db.get_user_base_currency(user_id)
+
+    fiat, crypto, metals = {}, {}, {}
+    try:
+        fiat, crypto, metals = await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    accounts = db.get_accounts_with_balances(user_id)
+    for acc in accounts:
+        acc["emoji"] = ACCOUNT_TYPE_EMOJI.get(acc["account_type"], "🏦")
+        acc["type_label"] = translate(db.get_user_lang(user_id), ACCOUNT_TYPE_KEY.get(acc["account_type"], "account_type_bank"))
+
+    total, all_converted = finance.net_worth(user_id, base_currency, fiat, crypto, metals)
+
+    return render(
+        request, "dashboard.html", active="dashboard",
+        accounts=accounts,
+        base_currency=base_currency,
+        net_worth=total,
+        net_worth_incomplete=not all_converted,
+    )
