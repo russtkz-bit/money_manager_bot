@@ -61,6 +61,15 @@ SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "true").lower() != "false"
 # run()." even though the routes exist. This is the SDK's own documented
 # pattern for mounting into an existing ASGI app.
 mcp_asgi_app = mcp_server.mcp.streamable_http_app()
+# ^ this Starlette app's own only route is exactly "/mcp" (see
+# mcp_server.py). It's mounted at the site ROOT (bottom of this file, not
+# here) rather than at Mount("/mcp", ...) — mounting at a prefix makes
+# Starlette forward "" as the remaining path for a bare "/mcp" request,
+# which doesn't match the sub-app's "/mcp" route and 307-redirects to
+# "/mcp/". Fine for a client that follows redirects, but claude.ai's own
+# "Add custom connector" server check does not, and reports the server as
+# unreachable. Mounting at "/" instead passes the full "/mcp" through
+# untouched, so it matches directly with no redirect.
 
 
 @asynccontextmanager
@@ -125,8 +134,6 @@ class McpBearerAuth:
         finally:
             mcp_server.current_user_id.reset(ctx_token)
 
-
-app.mount("/mcp", McpBearerAuth(mcp_asgi_app))
 
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["t"] = translate
@@ -478,3 +485,12 @@ async def forecast_chart(request: Request):
     if not img:
         return Response(status_code=204)
     return Response(content=img, media_type="image/png")
+
+
+# ─────────────────── MCP CONNECTOR ───────────────────
+
+# Must be the LAST route registered: Mount("/") matches every path, so
+# anything above this line (every dashboard route, /static) has to be
+# checked first or this would swallow all of it. See the mcp_asgi_app
+# comment near the top of this file for why root instead of Mount("/mcp").
+app.mount("/", McpBearerAuth(mcp_asgi_app))
