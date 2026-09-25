@@ -3,6 +3,8 @@ LANGUAGES = {
         # General
         "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and view financial statistics.\n\nIf you interested in new updates and receive feedback you can check this channel: @lookatpatch\n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
+        "webcode_sent": "🔑 Your web login code: `{code}`\n\nValid for 10 minutes, single-use. Enter it on the dashboard's login page.",
+        "webcode_sent_with_link": "🔑 Your web login code: `{code}`\n\nValid for 10 minutes, single-use.\n\n👉 [Open the dashboard]({url})",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
         "cancel": "❌ Cancel",
@@ -190,6 +192,8 @@ LANGUAGES = {
         # General
         "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и просматривать финансовую статистику.\n\nЕсли вас интересуют обновления и вы хотите обратной связи, можете зайти на канал: @lookatpatch\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
+        "webcode_sent": "🔑 Код для входа в веб-версию: `{code}`\n\nДействует 10 минут, одноразовый. Введите его на странице входа.",
+        "webcode_sent_with_link": "🔑 Код для входа в веб-версию: `{code}`\n\nДействует 10 минут, одноразовый.\n\n👉 [Открыть веб-версию]({url})",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
         "cancel": "❌ Отмена",

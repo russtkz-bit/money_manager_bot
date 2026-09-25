@@ -7,7 +7,9 @@ Connection is configured via the DATABASE_URL environment variable:
 
 import os
 import logging
+import secrets
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 import psycopg2
@@ -102,6 +104,14 @@ def init_db():
                     UNIQUE (user_id, category)
                 );
                 CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets (user_id);
+
+                CREATE TABLE IF NOT EXISTS web_login_codes (
+                    code        TEXT PRIMARY KEY,
+                    user_id     BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    expires_at  TIMESTAMPTZ NOT NULL,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_web_login_codes_user ON web_login_codes (user_id);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -585,6 +595,55 @@ def delete_budget(budget_id: int):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM budgets WHERE id=%s", (budget_id,))
+
+
+# ──────────────── WEB LOGIN CODES ────────────────
+
+_WEB_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O/1/I/L — easy to read/type
+
+
+def create_web_login_code(user_id: int, ttl_minutes: int = 10) -> str:
+    """Generate a one-time code for logging into the web dashboard.
+
+    Any of this user's previous unused codes are dropped first, so only one
+    code is ever active per user — requesting a new one invalidates the old.
+    """
+    ensure_user(user_id)
+    code = "".join(secrets.choice(_WEB_CODE_ALPHABET) for _ in range(8))
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM web_login_codes WHERE user_id=%s", (user_id,))
+            cur.execute(
+                "INSERT INTO web_login_codes (code, user_id, expires_at) "
+                "VALUES (%s, %s, NOW() + make_interval(mins => %s))",
+                (code, user_id, ttl_minutes)
+            )
+    return code
+
+
+def consume_web_login_code(code: str) -> Optional[int]:
+    """Validate and consume a one-time web login code.
+
+    Always deletes the code on lookup (one-time use, no replay — even an
+    expired code is burned). Returns the associated user_id if the code
+    existed and had not yet expired, else None.
+    """
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM web_login_codes WHERE code=%s "
+                "RETURNING user_id, expires_at",
+                (code,)
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    if row["expires_at"] < datetime.now(timezone.utc):
+        return None
+    return row["user_id"]
 
 
 # ──────────────── FILTERED QUERIES (statistics) ────────────────
