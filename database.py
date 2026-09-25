@@ -14,6 +14,8 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.extras import RealDictCursor
 
+import currencies
+
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -406,37 +408,25 @@ def update_goal_currency(goal_id: int, new_currency: str,
 
 # ──────────────── CURRENCY HELPERS ────────────────
 
-def _currency_to_usd_rate(currency: str, fiat: dict,
-                           crypto: dict, metals: dict) -> Optional[float]:
-    """Return how many units of `currency` equal 1 USD.
-    Fiat: N units per USD.  Crypto/metals: stored as USD-per-unit, so invert."""
-    if currency == "USD":
-        return 1.0
-    if currency in fiat:
-        return fiat[currency]
-    if currency in crypto:
-        price = crypto[currency]
-        return (1.0 / price) if price else None
-    if currency in metals:
-        price = metals[currency]
-        return (1.0 / price) if price else None
-    return None
-
-
 def convert_currency(amount: float, from_currency: str, to_currency: str,
-                     conversion_rates: dict) -> float:
-    """Convert amount between any two supported currencies using USD as pivot."""
+                     conversion_rates: Optional[dict]) -> Optional[float]:
+    """Convert amount between any two supported currencies using USD as pivot.
+
+    Delegates to currencies.convert_amount (the single implementation of
+    this math) instead of keeping a second copy — that second copy used to
+    return the raw, unconverted `amount` whenever a rate was missing, which
+    silently corrupted goal totals (e.g. a KZT balance added straight into
+    a USD goal as if it were USD). Returns None when a rate genuinely isn't
+    available; callers must treat that as "cannot convert right now" and
+    skip the contribution, never substitute the raw amount.
+    """
     if from_currency == to_currency:
         return amount
+    conversion_rates = conversion_rates or {}
     fiat   = conversion_rates.get("fiat",   {})
     crypto = conversion_rates.get("crypto", {})
     metals = conversion_rates.get("metals", {})
-    from_rate = _currency_to_usd_rate(from_currency, fiat, crypto, metals)
-    to_rate   = _currency_to_usd_rate(to_currency,   fiat, crypto, metals)
-    if not from_rate or not to_rate:
-        return amount
-    usd = amount / from_rate
-    return round(usd * to_rate, 4)
+    return currencies.convert_amount(amount, from_currency, to_currency, fiat, crypto, metals)
 
 
 # ──────────────── GOAL RECALCULATION ────────────────
@@ -486,11 +476,13 @@ def recalculate_all_goals(user_id: int,
                         continue
                     if acc_data["currency"] == goal["currency"]:
                         total += bal
-                    elif conversion_rates:
-                        total += convert_currency(
+                    else:
+                        converted = convert_currency(
                             bal, acc_data["currency"],
                             goal["currency"], conversion_rates
                         )
+                        if converted is not None:
+                            total += converted
 
                 total     = max(0.0, round(total, 4))
                 completed = total >= float(goal["target_amount"])
@@ -533,10 +525,12 @@ def calculate_initial_goal_amount(user_id: int,
                     continue
                 if acc["currency"] == goal_currency:
                     total += balance
-                elif conversion_rates:
-                    total += convert_currency(
+                else:
+                    converted = convert_currency(
                         balance, acc["currency"], goal_currency, conversion_rates
                     )
+                    if converted is not None:
+                        total += converted
     return round(total, 4)
 
 
