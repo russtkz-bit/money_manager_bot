@@ -30,11 +30,13 @@ venv/bin/pip install -r requirements.txt   # adds fastapi, uvicorn, jinja2, itsd
 Re-running this is safe — it keeps your existing `TELEGRAM_BOT_TOKEN` and
 `DATABASE_URL` untouched and just adds a freshly generated
 `SESSION_SECRET` (signs the login cookie) if one isn't already in `.env`.
-`WEB_BASE_URL` is optional; set it once you know your public URL (step 4)
-so `/webcode` messages include a clickable link:
+
+`WEB_BASE_URL` is optional and only needed for a **named tunnel**
+(Option B in step 4) — a quick tunnel's URL is auto-detected by
+`/webcode` every time, so nothing to set there:
 
 ```bash
-WEB_BASE_URL='https://your-tunnel-url' ./deploy/configure_env.sh
+WEB_BASE_URL='https://money.yourdomain.com' ./deploy/configure_env.sh
 ```
 
 ## 3. Run it locally first
@@ -71,12 +73,12 @@ cloudflared tunnel --url http://localhost:8000
 
 This prints a `https://<random-words>.trycloudflare.com` URL in its
 output — that's your dashboard, reachable from anywhere immediately. The
-tradeoff: **the URL changes every time this restarts**, so it's fine for
-trying things out but annoying to rely on long-term (you'd have to check
-the new URL each time and re-set `WEB_BASE_URL`).
+tradeoff: **the URL changes every time this restarts.** You don't need to
+track it by hand though — `/webcode` asks cloudflared's local metrics API
+for whatever the current URL is and includes a fresh link every time, so
+this is fine to rely on long-term too, not just for trying things out.
 
-To run it as a background service and be able to find the current URL
-later:
+To run it as a background service:
 
 ```ini
 # /etc/systemd/system/money-tunnel.service
@@ -86,7 +88,7 @@ After=network.target money-webapp.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:8000
+ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:8000 --metrics 127.0.0.1:20241
 Restart=always
 RestartSec=5
 
@@ -94,11 +96,16 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+`--metrics 127.0.0.1:20241` is what makes the auto-detected link in
+`/webcode` work — it's how the bot (running as `money-webapp`/`money-bot`
+on the same machine) asks cloudflared for the current URL. If you ever
+change that port, set `CLOUDFLARED_METRICS_PORT` to match in `.env`.
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now money-tunnel
-# find today's URL:
-sudo journalctl -u money-tunnel -n 50 --no-pager | grep -o 'https://[a-z-]*\.trycloudflare\.com'
+# sanity check — same thing /webcode does internally:
+curl -s http://127.0.0.1:20241/quicktunnel
 ```
 
 ### Option B — Named tunnel (stable URL, needs a domain you control)
