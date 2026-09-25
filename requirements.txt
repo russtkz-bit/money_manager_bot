@@ -10,8 +10,3 @@ uvicorn[standard]
 jinja2
 itsdangerous
 python-multipart
-
-# MCP connector for Claude (mounted into webapp.py at /mcp)
-# Pinned below 2.0: mcp 2.x renamed FastMCP to MCPServer and changed its
-# API — see https://py.sdk.modelcontextprotocol.io/v2/migration/
-mcp<2

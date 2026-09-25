@@ -190,27 +190,6 @@ Note `--host 127.0.0.1`: the web app only listens on localhost. The
 tunnel (step 4) is what makes it reachable publicly — the app itself is
 never directly exposed to the network, so there's no port to firewall.
 
-## 6. Connect Claude (MCP connector, optional)
-
-Same process, same tunnel as the dashboard above — nothing extra to
-deploy. `webapp.py` mounts a read-only [MCP](https://modelcontextprotocol.io)
-server at `/mcp`: net worth, transactions, budgets, goals, recurring
-spend, forecast — Claude can answer questions about your finances, but
-none of these tools can add, edit, or delete anything.
-
-In Telegram, send `/mcptoken` to the bot. It replies with a token, the
-`/mcp` URL, and the exact command to register it — for Claude Code:
-
-```bash
-claude mcp add --transport http money-manager https://your-tunnel-url/mcp \
-  --header "Authorization: Bearer <token>"
-```
-
-Claude Desktop's custom connector config takes the same URL + header. The
-token is permanent (unlike `/webcode`'s 10-minute code) since you configure
-it once — send `/mcptoken` again any time to see it, or tap "Regenerate"
-if it ever leaks, which immediately invalidates the old one.
-
 ## Security notes
 
 - The session cookie is `Secure` (HTTPS-only) by default, which matches
@@ -229,8 +208,3 @@ if it ever leaks, which immediately invalidates the old one.
 - This version of the dashboard is read-only — there is nothing on it
   that adds, edits, or deletes data, so a leaked session can expose your
   data but can't corrupt it.
-- The MCP connector (`/mcp`) is read-only for the same reason, and its
-  token is checked on every request independently of the dashboard's
-  session cookie — one leaking doesn't expose the other. If an `/mcptoken`
-  token ever leaks, regenerate it from the bot; the old one stops working
-  immediately.
