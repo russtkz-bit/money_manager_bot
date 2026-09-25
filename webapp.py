@@ -1,0 +1,113 @@
+"""
+webapp.py — read-only web dashboard for Money Manager Bot.
+
+Runs as a separate process from bot.py (same database, same finance.py /
+database.py logic — never a second copy of the business rules). Users log
+in with a short-lived code from the bot's /webcode command; there is no
+password and no public sign-up, since every account already exists as a
+Telegram user.
+
+Run directly for local development:
+    uvicorn webapp:app --reload --port 8000
+In production this is started by systemd — see deploy/POSTGRES_SETUP.md's
+sibling doc for the web app, deploy/WEBAPP_SETUP.md.
+"""
+
+import os
+
+from dotenv import load_dotenv
+
+# Same ordering requirement as bot.py: database.py reads DATABASE_URL from
+# the environment at import time, so .env must be loaded first.
+load_dotenv()
+
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+import database as db
+from languages import t as translate
+
+SESSION_SECRET = os.getenv("SESSION_SECRET")
+if not SESSION_SECRET:
+    raise ValueError(
+        "SESSION_SECRET not set in environment! Generate one with: "
+        "python3 -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+
+# Cookies are marked Secure (HTTPS-only) by default, matching the intended
+# deployment (behind a Cloudflare Tunnel or any TLS-terminating proxy).
+# Only disable this for local http://localhost development.
+SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "true").lower() != "false"
+
+app = FastAPI(title="Money Manager")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="mmb_session",
+    max_age=30 * 24 * 3600,   # 30 days
+    same_site="lax",
+    https_only=SESSION_HTTPS_ONLY,
+)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+templates = Jinja2Templates(directory="templates")
+templates.env.globals["t"] = translate
+
+
+def render(request: Request, name: str, **ctx):
+    """Jinja2 render helper that always injects the logged-in user's id/lang."""
+    user_id = request.session.get("user_id")
+    lang = db.get_user_lang(user_id) if user_id else "en"
+    return templates.TemplateResponse(
+        request, name, {"user_id": user_id, "lang": lang, **ctx}
+    )
+
+
+def require_user(request: Request) -> int:
+    """FastAPI dependency: returns the logged-in user_id, or redirects to /login.
+
+    Raising a Starlette HTTPException with a 3xx status + Location header is
+    the standard way to short-circuit a dependency into a redirect — the
+    default exception handler still emits the Location header, which is all
+    a browser needs to follow it, regardless of the body.
+    """
+    user_id = request.session.get("user_id")
+    if not user_id:
+        from starlette.exceptions import HTTPException
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
+    return user_id
+
+
+# ─────────────────── AUTH ───────────────────
+
+@app.get("/login")
+async def login_form(request: Request):
+    if request.session.get("user_id"):
+        return RedirectResponse("/", status_code=303)
+    return render(request, "login.html")
+
+
+@app.post("/login")
+async def login_submit(request: Request, code: str = Form(...)):
+    user_id = db.consume_web_login_code(code)
+    if not user_id:
+        return render(request, "login.html", error="Invalid or expired code / Неверный или просроченный код")
+    request.session["user_id"] = user_id
+    return RedirectResponse("/", status_code=303)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+# ─────────────────── DASHBOARD (placeholder — filled in next) ───────────────────
+
+@app.get("/")
+async def dashboard(request: Request):
+    user_id = require_user(request)
+    return render(request, "dashboard.html", active="dashboard")
