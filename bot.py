@@ -355,42 +355,87 @@ def _month_bounds() -> tuple:
     return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
 
 
+async def _fetch_rates_if_needed(needed: bool) -> dict:
+    """Fetch live conversion rates only when something actually depends on
+    them. cur.fetch_all_rates() is three external HTTP calls (each with a
+    10s timeout) — worth skipping on routine actions (delete a transaction,
+    add an account, ...) for users who have no goals and no budget that
+    would need converting."""
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    if needed:
+        try:
+            conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
+                await cur.fetch_all_rates()
+        except Exception:
+            pass
+    return conversion_rates
+
+
+def _convert_or_flag(amount: float, from_currency: str, to_currency: str,
+                     fiat: dict, crypto: dict, metals: dict) -> tuple:
+    """Convert amount to to_currency; returns (converted_amount, ok).
+
+    ok is False only when a real cross-currency conversion was needed but no
+    rate was available — in that case the returned amount is 0.0, so callers
+    must track `ok` across all conversions and tell the user the total may
+    be incomplete rather than silently presenting a too-low number as final.
+    """
+    if from_currency == to_currency:
+        return amount, True
+    conv = cur.convert_amount(amount, from_currency, to_currency, fiat, crypto, metals)
+    if conv is not None:
+        return conv, True
+    return 0.0, False
+
+
 def _spent_this_month(uid: int, category_key: str, target_currency: str,
-                       conversion_rates: dict) -> float:
-    """Sum this calendar month's expenses in `category_key`, converted to target_currency."""
+                       conversion_rates: dict) -> tuple:
+    """Sum this calendar month's expenses in `category_key`, converted to
+    target_currency. Returns (total, all_converted)."""
     start, end = _month_bounds()
     txns  = db.get_transactions_filtered(uid, start, end)
     fiat   = conversion_rates.get("fiat", {})
     crypto = conversion_rates.get("crypto", {})
     metals = conversion_rates.get("metals", {})
     total = 0.0
+    all_converted = True
     for tx in txns:
         if tx["type"] != "expense" or tx["category"] != category_key:
             continue
-        conv = cur.convert_amount(tx["amount"], tx["currency"], target_currency, fiat, crypto, metals)
-        if conv is not None:
-            total += conv
-        elif tx["currency"] == target_currency:
-            total += tx["amount"]
-    return total
+        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], target_currency, fiat, crypto, metals)
+        total += amt
+        all_converted = all_converted and ok
+    return total, all_converted
 
 
 def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l: str) -> str:
-    """Returns an extra message chunk warning about budget overspend, or ''."""
+    """Returns an extra message chunk warning about budget overspend, or ''.
+
+    The incomplete-conversion note is surfaced independently of the
+    exceeded/near-limit thresholds: a failed conversion makes `spent`
+    undercount (missing amounts contribute 0, see _spent_this_month), which
+    makes it *less* likely to cross either threshold — exactly backwards
+    from what should happen when we can't be sure of the real total, so a
+    real overspend must never be hidden behind a conversion failure.
+    """
     budget = db.get_budget_by_category(uid, category_key)
     if not budget or not budget["amount"]:
         return ""
-    spent = _spent_this_month(uid, category_key, budget["currency"], conversion_rates)
+    spent, all_converted = _spent_this_month(uid, category_key, budget["currency"], conversion_rates)
     pct   = spent / budget["amount"] * 100
     cat   = category_label(category_key, l)
     fmt_args = dict(category=cat, spent=f"{spent:,.2f}",
                     amount=f"{budget['amount']:,.2f}", currency=budget["currency"],
                     pct=round(pct))
+
+    lines = []
     if spent >= budget["amount"]:
-        return "\n\n" + t(l, "budget_exceeded", **fmt_args)
-    if pct >= 80:
-        return "\n\n" + t(l, "budget_near_limit", **fmt_args)
-    return ""
+        lines.append(t(l, "budget_exceeded", **fmt_args))
+    elif pct >= 80:
+        lines.append(t(l, "budget_near_limit", **fmt_args))
+    if not all_converted:
+        lines.append(t(l, "rates_incomplete_note"))
+    return ("\n\n" + "\n".join(lines)) if lines else ""
 
 
 def category_label(category_key: str, l: str) -> str:
@@ -582,9 +627,10 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     total_expense = 0.0
     by_cat: Dict[str, float] = {}
     txns_base: list = []   # same transactions, amounts converted to base_currency (for the bar chart)
+    any_incomplete = False
     for tx in txns:
-        conv = cur.convert_amount(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        amt  = conv if conv is not None else (tx["amount"] if tx["currency"] == base_currency else 0.0)
+        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        any_incomplete = any_incomplete or not ok
         if tx["type"] == "income":
             total_income += amt
         else:
@@ -600,6 +646,8 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     summary += t(l, "stats_expense", amount=f"{total_expense:,.2f}", currency=base_currency)
     if not txns:
         summary += "\n" + t(l, "stats_no_data_period")
+    if any_incomplete:
+        summary += "\n" + t(l, "rates_incomplete_note")
 
     if chart_types is None:
         chart_types = {"goals", "pie", "bar"}
@@ -676,11 +724,12 @@ async def cb_back_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def _detect_recurring(txns: list, base_currency: str,
                       fiat: dict, crypto: dict, metals: dict,
-                      min_months: int = 2) -> list:
+                      min_months: int = 2) -> tuple:
     """
     Heuristic recurring-expense detector: groups expenses by category, and
     flags a category as recurring when it has spending in at least
-    `min_months` distinct calendar months. Returns a list of
+    `min_months` distinct calendar months. Returns
+    (recurring, all_converted) where recurring is a list of
     {category, avg_amount, months, last_date} sorted by avg_amount desc.
 
     This is a lightweight stand-in for PocketSmith's recurring-transaction /
@@ -688,11 +737,12 @@ def _detect_recurring(txns: list, base_currency: str,
     without needing merchant-level matching.
     """
     by_cat: Dict[str, dict] = {}
+    all_converted = True
     for tx in txns:
         if tx["type"] != "expense":
             continue
-        conv = cur.convert_amount(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        amt  = conv if conv is not None else (tx["amount"] if tx["currency"] == base_currency else 0.0)
+        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        all_converted = all_converted and ok
         date_str = (tx.get("created_at") or "")[:10]
         month    = date_str[:7]
         cat      = tx["category"]
@@ -715,7 +765,7 @@ def _detect_recurring(txns: list, base_currency: str,
             "last_date": entry["last_date"],
         })
     recurring.sort(key=lambda r: r["avg_amount"], reverse=True)
-    return recurring
+    return recurring, all_converted
 
 
 async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -735,7 +785,7 @@ async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Look back 90 days — enough to catch monthly recurring spend in ~3 cycles.
     since = (datetime.now().date() - timedelta(days=89)).strftime("%Y-%m-%d")
     txns  = db.get_transactions_filtered(uid, since)
-    recurring = _detect_recurring(txns, base_currency, fiat, crypto, metals)
+    recurring, all_converted = _detect_recurring(txns, base_currency, fiat, crypto, metals)
 
     if not recurring:
         await query.edit_message_text(
@@ -754,6 +804,8 @@ async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE)
                   amount=f"{r['avg_amount']:,.2f}", currency=base_currency,
                   months=r["months"], last_date=r["last_date"])
     text += t(l, "recurring_forecast", amount=f"{total:,.2f}", currency=base_currency)
+    if not all_converted:
+        text += "\n" + t(l, "rates_incomplete_note")
 
     await query.edit_message_text(
         text,
@@ -936,12 +988,7 @@ async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
     tx_id = int(query.data.split("_")[1])
     db.delete_transaction(tx_id)
     await query.edit_message_text(t(l, "recalculating_goals"), parse_mode=ParseMode.MARKDOWN)
-    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
-    try:
-        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
-            await cur.fetch_all_rates()
-    except Exception:
-        pass
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
     db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "transaction_deleted"),
@@ -973,12 +1020,7 @@ async def cb_clear_transactions_confirm(update: Update, context: ContextTypes.DE
     l     = lang(uid)
     count = db.delete_all_transactions(uid)
     # Recalculate goals after clearing all transactions
-    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
-    try:
-        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
-            await cur.fetch_all_rates()
-    except Exception:
-        pass
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
     db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "transactions_cleared", count=count),
@@ -1087,12 +1129,7 @@ async def account_balance_entered(update: Update, context: ContextTypes.DEFAULT_
     db.add_account(uid, name, currency, balance, atype)
 
     # Recalculate goal progress now that a new account with balance exists
-    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
-    try:
-        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
-            await cur.fetch_all_rates()
-    except Exception:
-        pass
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
     db.recalculate_all_goals(uid, conversion_rates)
 
     emoji     = ACCOUNT_TYPE_EMOJI.get(atype, "🏦")
@@ -1138,12 +1175,7 @@ async def account_select_delete(update: Update, context: ContextTypes.DEFAULT_TY
     account_id = int(query.data.split("_")[1])
     db.delete_account(account_id)
     # Recalculate goals after account deletion
-    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
-    try:
-        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
-            await cur.fetch_all_rates()
-    except Exception:
-        pass
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
     db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "account_deleted"),
@@ -1177,14 +1209,18 @@ async def handle_view_budgets(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass
 
     text = t(l, "budgets_header")
+    any_incomplete = False
     for b in budgets:
-        spent = _spent_this_month(uid, b["category"], b["currency"], conversion_rates)
-        pct   = min(999, round(spent / b["amount"] * 100)) if b["amount"] else 0
-        bar   = _progress_bar(pct)
+        spent, all_converted = _spent_this_month(uid, b["category"], b["currency"], conversion_rates)
+        any_incomplete = any_incomplete or not all_converted
+        pct = min(999, round(spent / b["amount"] * 100)) if b["amount"] else 0
+        bar = _progress_bar(pct)
         text += t(l, "budget_line",
                   category=category_label(b["category"], l),
                   spent=f"{spent:,.2f}", amount=f"{b['amount']:,.2f}",
                   currency=b["currency"], pct=pct, bar=bar)
+    if any_incomplete:
+        text += "\n" + t(l, "rates_incomplete_note")
 
     await query.edit_message_text(
         text,
@@ -1400,13 +1436,13 @@ async def trans_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
         account_id=account_id
     )
 
-    # Recalculate all goal progress from account balances
-    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
-    try:
-        conversion_rates["fiat"], conversion_rates["crypto"], conversion_rates["metals"] = \
-            await cur.fetch_all_rates()
-    except Exception:
-        pass
+    # Recalculate all goal progress from account balances. Rates are also
+    # needed to check an expense against a budget in a different currency,
+    # even for a user with no goals at all.
+    needs_rates = bool(db.get_goals(uid)) or (
+        t_type == "expense" and db.get_budget_by_category(uid, ud["trans_category"]) is not None
+    )
+    conversion_rates = await _fetch_rates_if_needed(needs_rates)
 
     updated_goals = db.update_goals_from_transaction(
         uid, ud["trans_amount"], ud["trans_currency"], conversion_rates

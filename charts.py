@@ -10,7 +10,7 @@ Requires:  pip install matplotlib
 
 import io
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import matplotlib
@@ -206,9 +206,11 @@ def _group_key_and_label(dt: datetime, period: str):
     if period == "month":
         return dt.strftime("%Y-%m-%d"), dt.strftime("%d %b")
     if period == "6months":
-        # ISO week — label shows Monday of that week
+        # ISO week — label shows Monday of that week, not whichever
+        # transaction's own date happened to be processed last for it
         year, week, _ = dt.isocalendar()
-        return f"{year}-W{week:02d}", dt.strftime("%d %b")
+        monday = dt - timedelta(days=dt.weekday())
+        return f"{year}-W{week:02d}", monday.strftime("%d %b")
     # year or custom-long
     return dt.strftime("%Y-%m"), dt.strftime("%b\n%Y")
 
