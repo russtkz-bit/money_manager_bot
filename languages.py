@@ -131,6 +131,7 @@ LANGUAGES = {
         "metals_rates": "🥇 *Metals (per troy oz):*\n{rates}\n",
         "fetching_rates": "⏳ Fetching live rates...",
         "rates_error": "⚠️ Could not fetch some rates. Please try again later.",
+        "rates_incomplete_note": "⚠️ _Some amounts couldn't be converted (rates unavailable) — this total may be incomplete._",
 
         # Statistics
         "stats_header": "📊 *Your Financial Statistics*\n\n",
@@ -316,6 +317,7 @@ LANGUAGES = {
         "metals_rates": "🥇 *Металлы (за тройскую унцию):*\n{rates}\n",
         "fetching_rates": "⏳ Получение актуальных курсов...",
         "rates_error": "⚠️ Не удалось получить некоторые курсы. Попробуйте позже.",
+        "rates_incomplete_note": "⚠️ _Часть сумм не удалось конвертировать (курсы недоступны) — итог может быть неполным._",
 
         # Statistics
         "stats_header": "📊 *Ваша финансовая статистика*\n\n",
