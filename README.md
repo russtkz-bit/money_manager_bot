@@ -23,7 +23,6 @@ detection. Supports **English** and **Russian** languages.
 | 🌐 **Bilingual** | Full English 🇬🇧 and Russian 🇷🇺 support |
 | 💱 **Goal Currency Converter** | Convert goal amounts between any supported currency in real-time |
 | 🖥️ **Web Dashboard** | Optional read-only web view (accounts, transactions, stats, budgets, goals, recurring, forecast) — see [`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) |
-| 🔌 **Claude Connector (MCP)** | Optional read-only [MCP](https://modelcontextprotocol.io) server — ask Claude about your finances directly. Get a token with `/mcptoken`, see [`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) |
 
 ---
 
@@ -108,7 +107,6 @@ venv/bin/python bot.py   # or: source venv/bin/activate && python bot.py
 money_manager_bot/
 ├── bot.py              # Main bot logic & Telegram handlers
 ├── webapp.py           # Read-only web dashboard (FastAPI), separate process
-├── mcp_server.py       # Read-only MCP connector for Claude, mounted into webapp.py at /mcp
 ├── database.py         # PostgreSQL access layer (users, accounts, transactions, budgets, goals)
 ├── finance.py          # Currency-aware aggregation logic shared by bot.py and webapp.py
 ├── csv_import.py       # Bank/card CSV statement parser (used by bot.py's import flow)

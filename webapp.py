@@ -14,7 +14,6 @@ sibling doc for the web app, deploy/WEBAPP_SETUP.md.
 """
 
 import os
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -34,7 +33,6 @@ import charts as ch
 import currencies as cur
 import database as db
 import finance
-import mcp_server
 from languages import t as translate, category_label
 
 VALID_PERIODS = ("week", "month", "6m", "year")
@@ -54,31 +52,7 @@ if not SESSION_SECRET:
 # Only disable this for local http://localhost development.
 SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "true").lower() != "false"
 
-# FastMCP's streamable_http_app() carries its own lifespan (it starts a
-# task group its session manager needs) — Starlette does NOT propagate
-# lifespan into a Mount()ed sub-app automatically, so without this, every
-# /mcp request 500s with "Task group is not initialized. Make sure to use
-# run()." even though the routes exist. This is the SDK's own documented
-# pattern for mounting into an existing ASGI app.
-mcp_asgi_app = mcp_server.mcp.streamable_http_app()
-# ^ this Starlette app's own only route is exactly "/mcp" (see
-# mcp_server.py). It's mounted at the site ROOT (bottom of this file, not
-# here) rather than at Mount("/mcp", ...) — mounting at a prefix makes
-# Starlette forward "" as the remaining path for a bare "/mcp" request,
-# which doesn't match the sub-app's "/mcp" route and 307-redirects to
-# "/mcp/". Fine for a client that follows redirects, but claude.ai's own
-# "Add custom connector" server check does not, and reports the server as
-# unreachable. Mounting at "/" instead passes the full "/mcp" through
-# untouched, so it matches directly with no redirect.
-
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
-    async with mcp_server.mcp.session_manager.run():
-        yield
-
-
-app = FastAPI(title="Money Manager", lifespan=_lifespan)
+app = FastAPI(title="Money Manager")
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET,
@@ -88,52 +62,6 @@ app.add_middleware(
     https_only=SESSION_HTTPS_ONLY,
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-class McpBearerAuth:
-    """Raw ASGI middleware (not BaseHTTPMiddleware, which buffers/wraps the
-    response body — the MCP streamable-HTTP transport is a chunked stream,
-    and buffering it would break or stall it) guarding the mounted MCP
-    sub-app with the same kind of bearer token Claude Code/Desktop send for
-    a custom remote connector. On success it sets `current_user_id` for the
-    duration of the request so every tool call is scoped to that token's
-    Telegram user — the MCP server itself has no notion of "current user"
-    beyond this.
-    """
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        headers = dict(scope["headers"])
-        auth = headers.get(b"authorization", b"").decode("latin-1")
-        token = auth[7:] if auth.startswith("Bearer ") else None
-        user_id = db.get_user_by_mcp_token(token) if token else None
-
-        if user_id is None:
-            body = b'{"error":"invalid or missing bearer token"}'
-            await send({
-                "type": "http.response.start",
-                "status": 401,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"www-authenticate", b"Bearer"),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            })
-            await send({"type": "http.response.body", "body": body})
-            return
-
-        ctx_token = mcp_server.current_user_id.set(user_id)
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            mcp_server.current_user_id.reset(ctx_token)
-
 
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["t"] = translate
@@ -485,12 +413,3 @@ async def forecast_chart(request: Request):
     if not img:
         return Response(status_code=204)
     return Response(content=img, media_type="image/png")
-
-
-# ─────────────────── MCP CONNECTOR ───────────────────
-
-# Must be the LAST route registered: Mount("/") matches every path, so
-# anything above this line (every dashboard route, /static) has to be
-# checked first or this would swallow all of it. See the mcp_asgi_app
-# comment near the top of this file for why root instead of Mount("/mcp").
-app.mount("/", McpBearerAuth(mcp_asgi_app))
