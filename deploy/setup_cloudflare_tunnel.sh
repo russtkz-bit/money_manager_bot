@@ -6,18 +6,25 @@
 #
 # NOTE ON TESTING: unlike the other scripts in deploy/, the actual tunnel
 # creation step is an interactive Cloudflare login (a browser flow) that
-# cannot be scripted or verified from an automated session — only the
-# package install below was written to Cloudflare's own documented method,
-# not exercised end-to-end. Read deploy/WEBAPP_SETUP.md for what to expect
-# at each step and verify the tunnel yourself before relying on it.
+# cannot be scripted or verified from an automated session. Read
+# deploy/WEBAPP_SETUP.md for what to expect at each step and verify the
+# tunnel yourself before relying on it.
 #
-# This script only installs the `cloudflared` package (standard apt-repo
-# method, the same shape as setup_postgres.sh's own package install). It
-# does NOT create a tunnel for you — that's an interactive step, see
-# deploy/WEBAPP_SETUP.md for both the zero-config "quick tunnel" (no
-# Cloudflare account needed, URL changes on restart) and the "named
-# tunnel" (stable URL, needs a free Cloudflare account + a domain you
-# control) paths.
+# This script only installs the `cloudflared` package. It does NOT create
+# a tunnel for you — that's an interactive step, see deploy/WEBAPP_SETUP.md
+# for both the zero-config "quick tunnel" (no Cloudflare account needed,
+# URL changes on restart) and the "named tunnel" (stable URL, needs a free
+# Cloudflare account + a domain you control) paths.
+#
+# Installs the official .deb directly from Cloudflare's GitHub releases,
+# rather than adding pkg.cloudflare.com as an apt source. Cloudflare's apt
+# repo only publishes packages for a fixed list of Debian/Ubuntu codenames
+# — a codename it hasn't added yet (common right after a new Ubuntu
+# release) makes `apt-get update` fail with "repository ... does not have
+# a Release file", even though cloudflared itself (a single static Go
+# binary, no OS-version-specific dependencies) works identically on any
+# reasonably recent Debian/Ubuntu. The direct .deb sidesteps that
+# entirely, regardless of how new or old your release's codename is.
 #
 # Usage:
 #   sudo ./deploy/setup_cloudflare_tunnel.sh
@@ -34,16 +41,25 @@ if command -v cloudflared >/dev/null 2>&1; then
   exit 0
 fi
 
-echo "==> Installing cloudflared from Cloudflare's official apt repo…"
-mkdir -p --mode=0755 /usr/share/keyrings
-curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+ARCH="$(dpkg --print-architecture)"
+case "$ARCH" in
+  amd64|arm64) ;;
+  *)
+    echo "Unsupported architecture: ${ARCH}" >&2
+    echo "cloudflared publishes .deb packages for amd64/arm64 only — see" >&2
+    echo "https://github.com/cloudflare/cloudflared/releases for other options." >&2
+    exit 1
+    ;;
+esac
 
-CODENAME="$(lsb_release -cs 2>/dev/null || echo noble)"
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared ${CODENAME} main" \
-  > /etc/apt/sources.list.d/cloudflared.list
+echo "==> Downloading cloudflared (.deb, ${ARCH}) from Cloudflare's GitHub releases…"
+TMP_DEB="$(mktemp --suffix=.deb)"
+trap 'rm -f "$TMP_DEB"' EXIT
+curl -fsSL -o "$TMP_DEB" \
+  "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}.deb"
 
-apt-get update -y
-apt-get install -y cloudflared
+echo "==> Installing…"
+dpkg -i "$TMP_DEB" || apt-get install -f -y   # pulls in any missing deps, then retries the .deb
 
 echo
 echo "============================================================"
