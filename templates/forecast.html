@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'web_nav_forecast') }} — Money Manager{% endblock %}
+{% block content %}
+
+{% if not has_data %}
+  <p class="empty-state">{{ t(lang, 'web_forecast_no_data') }}</p>
+{% else %}
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <div class="label">{{ t(lang, 'web_forecast_current') }}</div>
+      <div class="value">{{ "%.2f"|format(current) }} {{ base_currency }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label">{{ t(lang, 'web_forecast_monthly_net') }}</div>
+      <div class="value {{ 'positive' if monthly_net >= 0 else 'negative' }}">{{ "%.2f"|format(monthly_net) }} {{ base_currency }}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label">{{ t(lang, 'web_forecast_projection', months=months_ahead) }}</div>
+      <div class="value {{ 'positive' if projected >= current else 'negative' }}">{{ "%.2f"|format(projected) }} {{ base_currency }}</div>
+    </div>
+  </div>
+
+  {% if incomplete %}
+    <p class="warning-note">⚠️ {{ t(lang, 'rates_incomplete_note') }}</p>
+  {% endif %}
+
+  <div class="card">
+    <h2>{{ t(lang, 'web_nav_forecast') }}</h2>
+    <img class="chart-img" src="/forecast/chart.png" alt="{{ t(lang, 'web_nav_forecast') }}">
+  </div>
+{% endif %}
+
+{% endblock %}

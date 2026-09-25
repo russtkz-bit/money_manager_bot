@@ -159,6 +159,51 @@ def aggregate_transactions(txns: list, base_currency: str, lang: str,
     }
 
 
+def forecast_net_worth(uid: int, base_currency: str,
+                       fiat: dict, crypto: dict, metals: dict,
+                       months_ahead: int = 6, lookback_days: int = 90,
+                       accounts: Optional[list] = None) -> dict:
+    """Project net worth forward by assuming the recent average monthly net
+    cash flow (income minus expenses over the last `lookback_days`) keeps
+    happening — the "if nothing changes" forecast PocketSmith is known for.
+    It's deliberately simple: one trailing average, not a per-category
+    recurring-transaction model, so it stays meaningful even for accounts
+    with irregular spending.
+
+    Returns {"current", "monthly_net", "all_converted", "points"} where
+    points is [(month_offset, projected_net_worth), ...] for month_offset
+    0..months_ahead (0 is today's actual net worth).
+    """
+    current, nw_ok = net_worth(uid, base_currency, fiat, crypto, metals, accounts=accounts)
+
+    start = (datetime.now().date() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    txns = db.get_transactions_filtered(uid, start)
+    total_income = 0.0
+    total_expense = 0.0
+    all_converted = nw_ok
+    for tx in txns:
+        amt, ok = convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        all_converted = all_converted and ok
+        if tx["type"] == "income":
+            total_income += amt
+        else:
+            total_expense += amt
+
+    months_observed = max(lookback_days / 30.0, 1.0)
+    monthly_net = (total_income - total_expense) / months_observed
+
+    points = [(0, current)]
+    for m in range(1, months_ahead + 1):
+        points.append((m, current + monthly_net * m))
+
+    return {
+        "current": current,
+        "monthly_net": monthly_net,
+        "all_converted": all_converted,
+        "points": points,
+    }
+
+
 def net_worth(uid: int, base_currency: str,
              fiat: dict, crypto: dict, metals: dict,
              accounts: Optional[list] = None) -> Tuple[float, bool]:

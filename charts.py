@@ -298,6 +298,54 @@ def generate_bar_chart(
     return _fig_to_bytes(fig)
 
 
+# ─────────────── Net worth forecast ───────────────
+
+def generate_forecast_chart(
+    points: list,
+    currency: str,
+    title: str = "Net Worth Forecast",
+    month_label: str = "mo",
+) -> Optional[bytes]:
+    """Line chart of projected net worth. `points` is
+    [(month_offset:int, value:float), ...] as returned by
+    finance.forecast_net_worth — offset 0 is today's actual value."""
+    if not points or len(points) < 2:
+        return None
+
+    offsets = [p[0] for p in points]
+    values  = [p[1] for p in points]
+    color   = ACCENT_GREEN if values[-1] >= values[0] else ACCENT_RED
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig.patch.set_facecolor(BG)
+    _style_ax(ax)
+
+    ax.plot(offsets, values, color=color, linewidth=2.4, marker="o",
+            markersize=5, zorder=3)
+    ax.fill_between(offsets, values, min(values, default=0), color=color,
+                    alpha=0.12, zorder=2)
+    ax.axhline(0, color=GRID_LINE, linewidth=0.8, zorder=1)
+
+    val_range = max(values) - min(values) or 1
+    label_offset = val_range * 0.03
+    for x, y in zip(offsets, values):
+        ax.text(x, y + label_offset, _short(y), ha="center", va="bottom",
+                color=TEXT_MAIN, fontsize=8, zorder=4)
+
+    ax.set_xticks(offsets)
+    ax.set_xticklabels(
+        ["now"] + [f"+{o}{month_label}" for o in offsets[1:]],
+        color=TEXT_MAIN, fontsize=8,
+    )
+    ax.set_ylabel(currency, color=TEXT_MAIN, fontsize=9)
+    ax.grid(axis="y", color=GRID_LINE, linewidth=0.5, alpha=0.6, zorder=0)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=TEXT_MAIN, fontsize=13, fontweight="bold", pad=14)
+
+    fig.tight_layout(pad=1.6)
+    return _fig_to_bytes(fig)
+
+
 # ─────────────── auto-period helper ───────────────
 
 def period_for_days(days: int) -> str:

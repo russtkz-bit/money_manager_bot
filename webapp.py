@@ -370,3 +370,46 @@ async def recurring_page(request: Request):
         recurring=rows, total=total, base_currency=base_currency,
         incomplete=not all_converted,
     )
+
+
+@app.get("/forecast")
+async def forecast_page(request: Request):
+    user_id = require_user(request)
+    base_currency = db.get_user_base_currency(user_id)
+    accounts = db.get_accounts_with_balances(user_id)
+    fiat, crypto, metals = await _fetch_rates_safe()
+
+    if not accounts:
+        return render(
+            request, "forecast.html", active="forecast",
+            has_data=False, base_currency=base_currency,
+        )
+
+    forecast = finance.forecast_net_worth(user_id, base_currency, fiat, crypto, metals, accounts=accounts)
+    months_ahead = forecast["points"][-1][0]
+
+    return render(
+        request, "forecast.html", active="forecast",
+        has_data=True, base_currency=base_currency,
+        current=forecast["current"], monthly_net=forecast["monthly_net"],
+        months_ahead=months_ahead, projected=forecast["points"][-1][1],
+        incomplete=not forecast["all_converted"],
+    )
+
+
+@app.get("/forecast/chart.png")
+async def forecast_chart(request: Request):
+    user_id = require_user(request)
+    base_currency = db.get_user_base_currency(user_id)
+    accounts = db.get_accounts_with_balances(user_id)
+    if not accounts:
+        return Response(status_code=204)
+    fiat, crypto, metals = await _fetch_rates_safe()
+    lang = db.get_user_lang(user_id)
+    forecast = finance.forecast_net_worth(user_id, base_currency, fiat, crypto, metals, accounts=accounts)
+    img = ch.generate_forecast_chart(
+        forecast["points"], base_currency, title=translate(lang, "web_nav_forecast")
+    )
+    if not img:
+        return Response(status_code=204)
+    return Response(content=img, media_type="image/png")

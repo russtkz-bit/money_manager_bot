@@ -274,17 +274,47 @@ def get_accounts_with_balances(user_id: int) -> List[Dict]:
 
 def add_transaction(user_id: int, t_type: str, amount: float,
                     currency: str, category: str, description: str = "",
-                    account_id: Optional[int] = None) -> int:
+                    account_id: Optional[int] = None,
+                    created_at: Optional[str] = None) -> int:
+    """created_at (YYYY-MM-DD) backdates the transaction — used by CSV import
+    to record the statement's own date instead of the import time. Omit it
+    for the normal "now" default."""
     ensure_user(user_id)
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO transactions "
-                "(user_id, account_id, type, amount, currency, category, description) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (user_id, account_id, t_type, amount, currency, category, description)
-            )
+            if created_at:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (user_id, account_id, t_type, amount, currency, category, description, created_at)
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (user_id, account_id, t_type, amount, currency, category, description)
+                )
             return cur.fetchone()["id"]
+
+
+def get_existing_transaction_signatures(user_id: int, account_id: int,
+                                         start_date: str, end_date: str) -> set:
+    """(date, amount, type, description) tuples already recorded for this
+    account within a date range — lets CSV import skip rows it already
+    imported on a previous run instead of double-counting them."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT created_at::date AS d, amount, type, description FROM transactions "
+                "WHERE user_id=%s AND account_id=%s AND created_at::date BETWEEN %s AND %s",
+                (user_id, account_id, start_date, end_date)
+            )
+            return {
+                (r["d"].strftime("%Y-%m-%d"), float(r["amount"]), r["type"], r["description"] or "")
+                for r in cur.fetchall()
+            }
 
 
 def get_transactions(user_id: int, limit: int = 20) -> List[Dict]:
