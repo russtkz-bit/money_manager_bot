@@ -481,6 +481,37 @@ async def cmd_webcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 
+async def _mcptoken_text_and_keyboard(uid: int, token: str):
+    l = lang(uid)
+    web_url = await _current_web_url()
+    mcp_url = f"{web_url}/mcp" if web_url else t(l, "mcptoken_no_url_placeholder")
+    text = t(l, "mcptoken_sent", token=token, url=mcp_url)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "mcptoken_regenerate_btn"), callback_data="mcptoken_regen")]
+    ])
+    return text, kb
+
+
+async def cmd_mcptoken(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Issues (or shows the existing) persistent token for the read-only
+    Claude MCP connector — unlike /webcode this is meant to be configured
+    once into Claude Desktop/Code, so it does not rotate on every call."""
+    uid = update.effective_user.id
+    db.ensure_user(uid)
+    token = db.get_or_create_mcp_token(uid)
+    text, kb = await _mcptoken_text_and_keyboard(uid, token)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+
+
+async def cb_mcptoken_regenerate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    token = db.regenerate_mcp_token(uid)
+    text, kb = await _mcptoken_text_and_keyboard(uid, token)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+
+
 # ─────────────────── MAIN MENU ROUTING ───────────────────
 
 async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2213,6 +2244,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu",  cmd_menu))
     app.add_handler(CommandHandler("webcode", cmd_webcode))
+    app.add_handler(CommandHandler("mcptoken", cmd_mcptoken))
+    app.add_handler(CallbackQueryHandler(cb_mcptoken_regenerate, pattern="^mcptoken_regen$"))
 
     app.add_handler(CallbackQueryHandler(cb_set_language, pattern="^setlang_"))
 
@@ -2241,6 +2274,7 @@ async def on_bot_start(app: Application) -> None:
         BotCommand("start",    "Start / Language select"),
         BotCommand("menu",     "Open main menu"),
         BotCommand("webcode",  "Get a login code for the web dashboard"),
+        BotCommand("mcptoken", "Get a token to connect Claude (read-only)"),
         BotCommand("cancel",   "Cancel current action"),
     ])
     logger.info("✅ Money Manager Bot commands registered")

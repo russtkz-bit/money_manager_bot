@@ -113,6 +113,12 @@ def init_db():
                     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_web_login_codes_user ON web_login_codes (user_id);
+
+                CREATE TABLE IF NOT EXISTS mcp_tokens (
+                    user_id     BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+                    token       TEXT NOT NULL UNIQUE,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -711,6 +717,50 @@ def consume_web_login_code(code: str) -> Optional[int]:
     if row["expires_at"] < datetime.now(timezone.utc):
         return None
     return row["user_id"]
+
+
+def get_or_create_mcp_token(user_id: int) -> str:
+    """Persistent bearer token for the MCP connector (Claude Desktop/Code
+    are configured with this once, unlike the short-lived /webcode) —
+    returns the existing one if already issued, otherwise creates it."""
+    ensure_user(user_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT token FROM mcp_tokens WHERE user_id=%s", (user_id,))
+            row = cur.fetchone()
+            if row:
+                return row["token"]
+            token = secrets.token_urlsafe(32)
+            cur.execute(
+                "INSERT INTO mcp_tokens (user_id, token) VALUES (%s, %s)",
+                (user_id, token)
+            )
+            return token
+
+
+def regenerate_mcp_token(user_id: int) -> str:
+    """Issues a fresh token, immediately invalidating the previous one —
+    for when a token may have leaked."""
+    ensure_user(user_id)
+    token = secrets.token_urlsafe(32)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO mcp_tokens (user_id, token) VALUES (%s, %s) "
+                "ON CONFLICT (user_id) DO UPDATE SET token = EXCLUDED.token, created_at = NOW()",
+                (user_id, token)
+            )
+    return token
+
+
+def get_user_by_mcp_token(token: Optional[str]) -> Optional[int]:
+    if not token:
+        return None
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM mcp_tokens WHERE token=%s", (token,))
+            row = cur.fetchone()
+            return row["user_id"] if row else None
 
 
 # ──────────────── FILTERED QUERIES (statistics) ────────────────
