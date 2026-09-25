@@ -7,7 +7,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional
 from io import BytesIO
 
 from dotenv import load_dotenv
@@ -572,21 +572,12 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     except Exception:
         pass
 
-    total_income  = 0.0
-    total_expense = 0.0
-    by_cat: Dict[str, float] = {}
-    txns_base: list = []   # same transactions, amounts converted to base_currency (for the bar chart)
-    any_incomplete = False
-    for tx in txns:
-        amt, ok = finance.convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        any_incomplete = any_incomplete or not ok
-        if tx["type"] == "income":
-            total_income += amt
-        else:
-            total_expense += amt
-            label = category_label(tx["category"], l)
-            by_cat[label] = by_cat.get(label, 0) + amt
-        txns_base.append({**tx, "amount": amt, "currency": base_currency})
+    agg = finance.aggregate_transactions(txns, base_currency, l, fiat, crypto, metals)
+    total_income   = agg["total_income"]
+    total_expense  = agg["total_expense"]
+    by_cat         = agg["by_category"]
+    txns_base      = agg["txns_base"]
+    any_incomplete = not agg["all_converted"]
     balance = total_income - total_expense
 
     summary  = t(l, "stats_period_header", period=period_label)

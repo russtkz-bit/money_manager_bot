@@ -129,11 +129,12 @@ async def dashboard(request: Request):
         pass
 
     accounts = db.get_accounts_with_balances(user_id)
+    lang = db.get_user_lang(user_id)
     for acc in accounts:
         acc["emoji"] = ACCOUNT_TYPE_EMOJI.get(acc["account_type"], "🏦")
-        acc["type_label"] = translate(db.get_user_lang(user_id), ACCOUNT_TYPE_KEY.get(acc["account_type"], "account_type_bank"))
+        acc["type_label"] = translate(lang, ACCOUNT_TYPE_KEY.get(acc["account_type"], "account_type_bank"))
 
-    total, all_converted = finance.net_worth(user_id, base_currency, fiat, crypto, metals)
+    total, all_converted = finance.net_worth(user_id, base_currency, fiat, crypto, metals, accounts=accounts)
 
     return render(
         request, "dashboard.html", active="dashboard",
@@ -149,6 +150,17 @@ async def dashboard(request: Request):
 MAX_TRANSACTIONS_SHOWN = 300
 
 
+def _valid_date(value: Optional[str]) -> Optional[str]:
+    """Returns the date string unchanged if it's a real YYYY-MM-DD date, else None."""
+    if not value:
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value
+
+
 @app.get("/transactions")
 async def transactions_page(
     request: Request,
@@ -159,7 +171,13 @@ async def transactions_page(
     user_id = require_user(request)
     lang = db.get_user_lang(user_id)
 
-    if not start or not end:
+    start = _valid_date(start)
+    end = _valid_date(end)
+    # Malformed or reversed input falls back to the default range rather
+    # than reaching the database — get_transactions_filtered casts these
+    # straight into a raw SQL date comparison, so anything else raised an
+    # unhandled 500 (InvalidDatetimeFormat) instead of just showing data.
+    if not start or not end or start > end:
         today = datetime.now().date()
         start = (today - timedelta(days=29)).strftime("%Y-%m-%d")
         end = today.strftime("%Y-%m-%d")
@@ -205,22 +223,9 @@ def _compute_period_data(user_id: int, start: str, end: str, base_currency: str,
     all amounts converted to base_currency."""
     lang = db.get_user_lang(user_id)
     txns = db.get_transactions_filtered(user_id, start, end)
-    total_income = 0.0
-    total_expense = 0.0
-    by_cat: dict = {}
-    txns_base = []
-    incomplete = False
-    for tx in txns:
-        amt, ok = finance.convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        incomplete = incomplete or not ok
-        if tx["type"] == "income":
-            total_income += amt
-        else:
-            total_expense += amt
-            label = category_label(tx["category"], lang)
-            by_cat[label] = by_cat.get(label, 0) + amt
-        txns_base.append({**tx, "amount": amt, "currency": base_currency})
-    return total_income, total_expense, by_cat, txns_base, incomplete
+    agg = finance.aggregate_transactions(txns, base_currency, lang, fiat, crypto, metals)
+    return (agg["total_income"], agg["total_expense"], agg["by_category"],
+            agg["txns_base"], not agg["all_converted"])
 
 
 @app.get("/stats")

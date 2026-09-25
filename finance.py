@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import currencies as cur
 import database as db
+from languages import category_label
 
 
 def month_bounds() -> Tuple[str, str]:
@@ -124,11 +125,52 @@ def detect_recurring(txns: list, base_currency: str,
     return recurring, all_converted
 
 
+def aggregate_transactions(txns: list, base_currency: str, lang: str,
+                           fiat: dict, crypto: dict, metals: dict) -> dict:
+    """Convert every transaction in `txns` to base_currency and aggregate
+    income/expense totals plus a translated category breakdown — the exact
+    math both the bot's stats charts and the web dashboard's stats page
+    need. One implementation so they can never drift apart. Returns:
+      {"total_income", "total_expense", "by_category", "txns_base", "all_converted"}
+    txns_base is the same transaction dicts with `amount`/`currency`
+    replaced by the base_currency-converted values (handy for bar charts).
+    """
+    total_income = 0.0
+    total_expense = 0.0
+    by_category: Dict[str, float] = {}
+    txns_base = []
+    all_converted = True
+    for tx in txns:
+        amt, ok = convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        all_converted = all_converted and ok
+        if tx["type"] == "income":
+            total_income += amt
+        else:
+            total_expense += amt
+            label = category_label(tx["category"], lang)
+            by_category[label] = by_category.get(label, 0) + amt
+        txns_base.append({**tx, "amount": amt, "currency": base_currency})
+    return {
+        "total_income": total_income,
+        "total_expense": total_expense,
+        "by_category": by_category,
+        "txns_base": txns_base,
+        "all_converted": all_converted,
+    }
+
+
 def net_worth(uid: int, base_currency: str,
-             fiat: dict, crypto: dict, metals: dict) -> Tuple[float, bool]:
+             fiat: dict, crypto: dict, metals: dict,
+             accounts: Optional[list] = None) -> Tuple[float, bool]:
     """Sum every account's computed balance, converted to base_currency.
-    Returns (total, all_converted)."""
-    accounts = db.get_accounts_with_balances(uid)
+    Returns (total, all_converted).
+
+    Pass `accounts` (from db.get_accounts_with_balances) if the caller
+    already fetched it — each account costs its own balance-aggregation
+    query, so re-fetching here would double the DB work for no reason.
+    """
+    if accounts is None:
+        accounts = db.get_accounts_with_balances(uid)
     total = 0.0
     all_converted = True
     for acc in accounts:
