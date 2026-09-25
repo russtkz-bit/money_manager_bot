@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="{{ lang or 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Money Manager{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if user_id %}
+  <header class="topbar">
+    <span class="brand">💰 Money Manager</span>
+    <a class="logout" href="/logout">{{ t(lang, 'web_logout') }}</a>
+  </header>
+  <nav class="tabs">
+    <a href="/" class="{{ 'active' if active == 'dashboard' else '' }}">{{ t(lang, 'web_nav_dashboard') }}</a>
+    <a href="/transactions" class="{{ 'active' if active == 'transactions' else '' }}">{{ t(lang, 'btn_transactions') }}</a>
+    <a href="/stats" class="{{ 'active' if active == 'stats' else '' }}">{{ t(lang, 'btn_statistics') }}</a>
+    <a href="/budgets" class="{{ 'active' if active == 'budgets' else '' }}">{{ t(lang, 'btn_budgets') }}</a>
+    <a href="/goals" class="{{ 'active' if active == 'goals' else '' }}">{{ t(lang, 'btn_goals') }}</a>
+    <a href="/recurring" class="{{ 'active' if active == 'recurring' else '' }}">{{ t(lang, 'stats_recurring') }}</a>
+  </nav>
+{% endif %}
+  <div class="container">
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

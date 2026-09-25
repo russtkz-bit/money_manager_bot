@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'stats_recurring') }} — Money Manager{% endblock %}
+{% block content %}
+
+{% if not recurring %}
+  <p class="empty-state">{{ t(lang, 'no_recurring') }}</p>
+{% else %}
+  <div class="stat-grid">
+    <div class="stat-tile">
+      <div class="label">{{ t(lang, 'web_recurring_forecast') }}</div>
+      <div class="value">{{ "%.2f"|format(total) }} {{ base_currency }}</div>
+    </div>
+  </div>
+
+  {% for r in recurring %}
+  <div class="card">
+    <h2>{{ r.category_display }}</h2>
+    <div class="value">{{ "%.2f"|format(r.avg_amount) }} {{ base_currency }} <span class="muted">/mo</span></div>
+    <div class="muted">{{ t(lang, 'web_seen_months', months=r.months, date=r.last_date) }}</div>
+  </div>
+  {% endfor %}
+
+  {% if incomplete %}
+    <p class="warning-note">⚠️ {{ t(lang, 'rates_incomplete_note') }}</p>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

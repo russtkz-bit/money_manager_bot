@@ -7,7 +7,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional
 from io import BytesIO
 
 from dotenv import load_dotenv
@@ -28,7 +28,8 @@ from telegram.constants import ParseMode
 import database as db
 import currencies as cur
 import charts as ch
-from languages import t
+import finance
+from languages import t, category_label
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -349,12 +350,6 @@ def _account_type_label(account_type: str, l: str) -> str:
     return t(l, key_map.get(account_type, "account_type_bank"))
 
 
-def _month_bounds() -> tuple:
-    today = datetime.now().date()
-    start = today.replace(day=1)
-    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
-
-
 async def _fetch_rates_if_needed(needed: bool) -> dict:
     """Fetch live conversion rates only when something actually depends on
     them. cur.fetch_all_rates() is three external HTTP calls (each with a
@@ -371,49 +366,12 @@ async def _fetch_rates_if_needed(needed: bool) -> dict:
     return conversion_rates
 
 
-def _convert_or_flag(amount: float, from_currency: str, to_currency: str,
-                     fiat: dict, crypto: dict, metals: dict) -> tuple:
-    """Convert amount to to_currency; returns (converted_amount, ok).
-
-    ok is False only when a real cross-currency conversion was needed but no
-    rate was available — in that case the returned amount is 0.0, so callers
-    must track `ok` across all conversions and tell the user the total may
-    be incomplete rather than silently presenting a too-low number as final.
-    """
-    if from_currency == to_currency:
-        return amount, True
-    conv = cur.convert_amount(amount, from_currency, to_currency, fiat, crypto, metals)
-    if conv is not None:
-        return conv, True
-    return 0.0, False
-
-
-def _spent_this_month(uid: int, category_key: str, target_currency: str,
-                       conversion_rates: dict) -> tuple:
-    """Sum this calendar month's expenses in `category_key`, converted to
-    target_currency. Returns (total, all_converted)."""
-    start, end = _month_bounds()
-    txns  = db.get_transactions_filtered(uid, start, end)
-    fiat   = conversion_rates.get("fiat", {})
-    crypto = conversion_rates.get("crypto", {})
-    metals = conversion_rates.get("metals", {})
-    total = 0.0
-    all_converted = True
-    for tx in txns:
-        if tx["type"] != "expense" or tx["category"] != category_key:
-            continue
-        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], target_currency, fiat, crypto, metals)
-        total += amt
-        all_converted = all_converted and ok
-    return total, all_converted
-
-
 def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l: str) -> str:
     """Returns an extra message chunk warning about budget overspend, or ''.
 
     The incomplete-conversion note is surfaced independently of the
     exceeded/near-limit thresholds: a failed conversion makes `spent`
-    undercount (missing amounts contribute 0, see _spent_this_month), which
+    undercount (missing amounts contribute 0, see finance.spent_this_month), which
     makes it *less* likely to cross either threshold — exactly backwards
     from what should happen when we can't be sure of the real total, so a
     real overspend must never be hidden behind a conversion failure.
@@ -421,7 +379,7 @@ def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l:
     budget = db.get_budget_by_category(uid, category_key)
     if not budget or not budget["amount"]:
         return ""
-    spent, all_converted = _spent_this_month(uid, category_key, budget["currency"], conversion_rates)
+    spent, all_converted = finance.spent_this_month(uid, category_key, budget["currency"], conversion_rates)
     pct   = spent / budget["amount"] * 100
     cat   = category_label(category_key, l)
     fmt_args = dict(category=cat, spent=f"{spent:,.2f}",
@@ -436,17 +394,6 @@ def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l:
     if not all_converted:
         lines.append(t(l, "rates_incomplete_note"))
     return ("\n\n" + "\n".join(lines)) if lines else ""
-
-
-def category_label(category_key: str, l: str) -> str:
-    """Translate a canonical category key (e.g. 'food') into a display label.
-
-    Falls back to returning the value unchanged for anything that isn't a
-    known key — covers transactions/budgets recorded before this bot stored
-    canonical keys, when the category text itself was already the label.
-    """
-    label = t(l, f"cat_{category_key}")
-    return category_key if label == f"cat_{category_key}" else label
 
 
 # ─────────────────── START / WELCOME ───────────────────
@@ -480,6 +427,20 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     db.ensure_user(uid)
     await send_main_menu(update, uid)
+
+
+async def cmd_webcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Issues a short-lived, single-use code for logging into the web dashboard."""
+    uid = update.effective_user.id
+    db.ensure_user(uid)
+    l    = lang(uid)
+    code = db.create_web_login_code(uid)
+    web_url = os.getenv("WEB_BASE_URL", "").rstrip("/")
+    if web_url:
+        text = t(l, "webcode_sent_with_link", code=code, url=f"{web_url}/login")
+    else:
+        text = t(l, "webcode_sent", code=code)
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
 
 
 # ─────────────────── MAIN MENU ROUTING ───────────────────
@@ -589,19 +550,7 @@ async def handle_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def _period_dates(period: str):
-    today = datetime.now().date()
-    if period == "week":
-        start, bar = today - timedelta(days=6), "week"
-    elif period == "month":
-        start, bar = today - timedelta(days=29), "month"
-    elif period == "6m":
-        start, bar = today - timedelta(days=179), "6months"
-    elif period == "year":
-        start, bar = today - timedelta(days=364), "year"
-    else:
-        return None, None, None
-    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"), bar
+_period_dates = finance.period_dates
 
 
 async def _send_charts(update, context, uid, start_date, end_date, bar_period, period_label, chart_types=None):
@@ -623,21 +572,12 @@ async def _send_charts(update, context, uid, start_date, end_date, bar_period, p
     except Exception:
         pass
 
-    total_income  = 0.0
-    total_expense = 0.0
-    by_cat: Dict[str, float] = {}
-    txns_base: list = []   # same transactions, amounts converted to base_currency (for the bar chart)
-    any_incomplete = False
-    for tx in txns:
-        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        any_incomplete = any_incomplete or not ok
-        if tx["type"] == "income":
-            total_income += amt
-        else:
-            total_expense += amt
-            label = category_label(tx["category"], l)
-            by_cat[label] = by_cat.get(label, 0) + amt
-        txns_base.append({**tx, "amount": amt, "currency": base_currency})
+    agg = finance.aggregate_transactions(txns, base_currency, l, fiat, crypto, metals)
+    total_income   = agg["total_income"]
+    total_expense  = agg["total_expense"]
+    by_cat         = agg["by_category"]
+    txns_base      = agg["txns_base"]
+    any_incomplete = not agg["all_converted"]
     balance = total_income - total_expense
 
     summary  = t(l, "stats_period_header", period=period_label)
@@ -722,52 +662,6 @@ async def cb_back_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, uid, edit=True)
 
 
-def _detect_recurring(txns: list, base_currency: str,
-                      fiat: dict, crypto: dict, metals: dict,
-                      min_months: int = 2) -> tuple:
-    """
-    Heuristic recurring-expense detector: groups expenses by category, and
-    flags a category as recurring when it has spending in at least
-    `min_months` distinct calendar months. Returns
-    (recurring, all_converted) where recurring is a list of
-    {category, avg_amount, months, last_date} sorted by avg_amount desc.
-
-    This is a lightweight stand-in for PocketSmith's recurring-transaction /
-    cash-flow forecast — good enough to spot subscriptions, rent, etc.
-    without needing merchant-level matching.
-    """
-    by_cat: Dict[str, dict] = {}
-    all_converted = True
-    for tx in txns:
-        if tx["type"] != "expense":
-            continue
-        amt, ok = _convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
-        all_converted = all_converted and ok
-        date_str = (tx.get("created_at") or "")[:10]
-        month    = date_str[:7]
-        cat      = tx["category"]
-        entry    = by_cat.setdefault(cat, {"amounts": [], "months": set(), "last_date": date_str})
-        entry["amounts"].append(amt)
-        if month:
-            entry["months"].add(month)
-        if date_str > entry["last_date"]:
-            entry["last_date"] = date_str
-
-    recurring = []
-    for cat, entry in by_cat.items():
-        if len(entry["months"]) < min_months:
-            continue
-        avg = sum(entry["amounts"]) / len(entry["months"])
-        recurring.append({
-            "category": cat,
-            "avg_amount": avg,
-            "months": len(entry["months"]),
-            "last_date": entry["last_date"],
-        })
-    recurring.sort(key=lambda r: r["avg_amount"], reverse=True)
-    return recurring, all_converted
-
-
 async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -785,7 +679,7 @@ async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Look back 90 days — enough to catch monthly recurring spend in ~3 cycles.
     since = (datetime.now().date() - timedelta(days=89)).strftime("%Y-%m-%d")
     txns  = db.get_transactions_filtered(uid, since)
-    recurring, all_converted = _detect_recurring(txns, base_currency, fiat, crypto, metals)
+    recurring, all_converted = finance.detect_recurring(txns, base_currency, fiat, crypto, metals)
 
     if not recurring:
         await query.edit_message_text(
@@ -1211,7 +1105,7 @@ async def handle_view_budgets(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = t(l, "budgets_header")
     any_incomplete = False
     for b in budgets:
-        spent, all_converted = _spent_this_month(uid, b["category"], b["currency"], conversion_rates)
+        spent, all_converted = finance.spent_this_month(uid, b["category"], b["currency"], conversion_rates)
         any_incomplete = any_incomplete or not all_converted
         pct = min(999, round(spent / b["amount"] * 100)) if b["amount"] else 0
         bar = _progress_bar(pct)
@@ -2068,6 +1962,7 @@ def build_application() -> Application:
     # ── Non-conversation handlers ──
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu",  cmd_menu))
+    app.add_handler(CommandHandler("webcode", cmd_webcode))
 
     app.add_handler(CallbackQueryHandler(cb_set_language, pattern="^setlang_"))
 
@@ -2092,9 +1987,10 @@ def build_application() -> Application:
 
 async def on_bot_start(app: Application) -> None:
     await app.bot.set_my_commands([
-        BotCommand("start",  "Start / Language select"),
-        BotCommand("menu",   "Open main menu"),
-        BotCommand("cancel", "Cancel current action"),
+        BotCommand("start",    "Start / Language select"),
+        BotCommand("menu",     "Open main menu"),
+        BotCommand("webcode",  "Get a login code for the web dashboard"),
+        BotCommand("cancel",   "Cancel current action"),
     ])
     logger.info("✅ Money Manager Bot commands registered")
 

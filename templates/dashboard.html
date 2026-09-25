@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'web_nav_dashboard') }} — Money Manager{% endblock %}
+{% block content %}
+
+<div class="stat-grid">
+  <div class="stat-tile">
+    <div class="label">{{ t(lang, 'web_net_worth') }}</div>
+    <div class="value">{{ "%.2f"|format(net_worth) }} {{ base_currency }}</div>
+    {% if net_worth_incomplete %}
+      <div class="warning-note">⚠️ {{ t(lang, 'web_incomplete_rates') }}</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>{{ t(lang, 'btn_accounts') }}</h2>
+  {% if not accounts %}
+    <p class="empty-state">{{ t(lang, 'no_accounts') }}</p>
+  {% else %}
+    <table>
+      <tbody>
+        {% for acc in accounts %}
+        <tr>
+          <td>{{ acc.emoji }} <strong>{{ acc.name }}</strong><br><span class="muted">{{ acc.type_label }}</span></td>
+          <td style="text-align:right">{{ "%.2f"|format(acc.computed_balance) }} {{ acc.currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Money Manager — Login{% endblock %}
+{% block content %}
+<form class="login-form" method="post" action="/login">
+  <h1>💰 Money Manager</h1>
+  <p class="muted">
+    Send <code>/webcode</code> to the bot in Telegram, then enter the code below.<br>
+    Отправьте боту <code>/webcode</code> в Telegram и введите код ниже.
+  </p>
+  <input type="text" name="code" placeholder="XXXXXXXX" maxlength="8" autocomplete="one-time-code" autofocus required>
+  {% if error %}<p class="error-text">{{ error }}</p>{% endif %}
+  <button type="submit">Log in / Войти</button>
+</form>
+{% endblock %}

@@ -9,15 +9,22 @@
 # - DATABASE_URL: auto-picked up from the credentials file
 #   deploy/setup_postgres.sh writes, if present — no copy/paste needed.
 #   Falls back to a hidden prompt otherwise.
-# - Writes .env with chmod 600 (only the owner can read it) and refuses to
-#   silently clobber an existing one.
+# - SESSION_SECRET (web dashboard only): generated automatically, never
+#   prompted — it's just a random signing key, not something you choose.
+# - WEB_BASE_URL (web dashboard only, optional): only used to put a
+#   clickable link in /webcode messages.
+# - Re-running this script is safe and additive: any value already in
+#   .env is kept as-is; only genuinely missing values are filled in (or
+#   overridden by an environment variable you set before calling this).
+#   Writes with chmod 600 (only the owner can read it).
 #
 # Usage:
 #   ./deploy/configure_env.sh
 #
-# Non-interactive (e.g. from another script): set TELEGRAM_BOT_TOKEN and/or
-# DATABASE_URL as environment variables before calling — whichever one(s)
-# are already set won't be prompted for.
+# Non-interactive (e.g. from another script): set TELEGRAM_BOT_TOKEN,
+# DATABASE_URL, SESSION_SECRET, and/or WEB_BASE_URL as environment
+# variables before calling — whichever ones are set take priority over
+# both existing .env values and prompts.
 
 set -euo pipefail
 
@@ -26,22 +33,33 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."   # repo root, regardless of caller's cwd
 ENV_FILE=".env"
 CREDS_FILE="${CREDS_FILE:-/root/money_manager_db_credentials.txt}"
 
+declare -A EXISTING
 if [[ -f "$ENV_FILE" ]]; then
-  read -rp "${ENV_FILE} already exists — overwrite? [y/N] " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || { echo "Aborted — left ${ENV_FILE} untouched."; exit 1; }
+  while IFS='=' read -r key value; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    EXISTING["$key"]="$value"
+  done < "$ENV_FILE"
 fi
 
+# ── TELEGRAM_BOT_TOKEN ──
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   TOKEN="$TELEGRAM_BOT_TOKEN"
+elif [[ -n "${EXISTING[TELEGRAM_BOT_TOKEN]:-}" ]]; then
+  TOKEN="${EXISTING[TELEGRAM_BOT_TOKEN]}"
+  echo "==> Keeping existing TELEGRAM_BOT_TOKEN from ${ENV_FILE}."
 else
   read -rsp "Telegram bot token (from @BotFather, input hidden): " TOKEN
   echo
 fi
 [[ -n "$TOKEN" ]] || { echo "No token given, aborting." >&2; exit 1; }
 
+# ── DATABASE_URL ──
 CREDS_FOUND=0
 if [[ -n "${DATABASE_URL:-}" ]]; then
   DB_URL="$DATABASE_URL"
+elif [[ -n "${EXISTING[DATABASE_URL]:-}" ]]; then
+  DB_URL="${EXISTING[DATABASE_URL]}"
+  echo "==> Keeping existing DATABASE_URL from ${ENV_FILE}."
 else
   # setup_postgres.sh writes this chmod 600 as root, and this script is
   # normally run as the bot's own (non-root) user — a plain `[[ -f ]]` can't
@@ -61,10 +79,29 @@ else
 fi
 [[ -n "$DB_URL" ]] || { echo "No DATABASE_URL given, aborting." >&2; exit 1; }
 
+# ── SESSION_SECRET (web dashboard) ──
+if [[ -n "${SESSION_SECRET:-}" ]]; then
+  SECRET="$SESSION_SECRET"
+elif [[ -n "${EXISTING[SESSION_SECRET]:-}" ]]; then
+  SECRET="${EXISTING[SESSION_SECRET]}"
+else
+  SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || openssl rand -hex 32)"
+  echo "==> Generated a new SESSION_SECRET for the web dashboard."
+fi
+
+# ── WEB_BASE_URL (web dashboard, optional) ──
+if [[ -n "${WEB_BASE_URL:-}" ]]; then
+  BASE_URL="$WEB_BASE_URL"
+else
+  BASE_URL="${EXISTING[WEB_BASE_URL]:-}"
+fi
+
 umask 077
 {
   echo "TELEGRAM_BOT_TOKEN=${TOKEN}"
   echo "DATABASE_URL=${DB_URL}"
+  echo "SESSION_SECRET=${SECRET}"
+  echo "WEB_BASE_URL=${BASE_URL}"
 } > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 

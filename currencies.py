@@ -1,5 +1,6 @@
 import aiohttp
 import asyncio
+import time
 from typing import Dict, Optional, Tuple
 
 # Supported fiat currencies for display
@@ -80,13 +81,33 @@ async def fetch_metals_rates() -> Dict[str, float]:
     return {}
 
 
+_rates_cache: Dict[str, object] = {"data": None, "fetched_at": 0.0}
+_RATES_CACHE_TTL_SECONDS = 60
+
+
 async def fetch_all_rates() -> Tuple[Dict, Dict, Dict]:
-    """Fetch all rates concurrently."""
+    """Fetch all rates concurrently, with a short-lived cache.
+
+    A single web dashboard page load can trigger several independent calls
+    to this (the page itself plus each embedded chart image, each a
+    separate HTTP request with no shared state) — without a cache that's
+    up to 9 external API calls for one page view. A failed fetch (all
+    three dicts empty) is never cached, so a transient outage doesn't get
+    "stuck" for the full TTL.
+    """
+    now = time.monotonic()
+    cached = _rates_cache["data"]
+    if cached is not None and (now - _rates_cache["fetched_at"]) < _RATES_CACHE_TTL_SECONDS:
+        return cached
+
     fiat, crypto, metals = await asyncio.gather(
         fetch_fiat_rates(),
         fetch_crypto_rates(),
         fetch_metals_rates(),
     )
+    if fiat or crypto or metals:
+        _rates_cache["data"] = (fiat, crypto, metals)
+        _rates_cache["fetched_at"] = now
     return fiat, crypto, metals
 
 

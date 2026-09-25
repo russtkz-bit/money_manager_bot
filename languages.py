@@ -3,6 +3,21 @@ LANGUAGES = {
         # General
         "welcome": "👋 Welcome to *Money Manager Bot*!\n\nI help you track income & expenses, set financial goals, monitor currencies, and view financial statistics.\n\nIf you interested in new updates and receive feedback you can check this channel: @lookatpatch\n\nPlease choose your language / Выберите язык:",
         "language_set": "✅ Language set to *English*.",
+        "webcode_sent": "🔑 Your web login code: `{code}`\n\nValid for 10 minutes, single-use. Enter it on the dashboard's login page.",
+        "webcode_sent_with_link": "🔑 Your web login code: `{code}`\n\nValid for 10 minutes, single-use.\n\n👉 [Open the dashboard]({url})",
+        "web_logout": "Log out",
+        "web_nav_dashboard": "Overview",
+        "web_net_worth": "Net worth",
+        "web_incomplete_rates": "Some balances couldn't be converted (rates unavailable) — total may be incomplete.",
+        "web_all": "All",
+        "web_date_from": "From",
+        "web_date_to": "To",
+        "web_apply": "Apply",
+        "web_truncated_note": "Showing the first {n} — narrow the date range to see more.",
+        "web_balance": "Balance",
+        "web_no_chart_data": "Not enough data for this period.",
+        "web_seen_months": "seen in {months} months, last on {date}",
+        "web_recurring_forecast": "Estimated recurring spend next month",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
         "cancel": "❌ Cancel",
@@ -190,6 +205,21 @@ LANGUAGES = {
         # General
         "welcome": "👋 Добро пожаловать в *Money Manager Bot*!\n\nЯ помогаю отслеживать доходы и расходы, ставить финансовые цели, мониторить курсы валют и просматривать финансовую статистику.\n\nЕсли вас интересуют обновления и вы хотите обратной связи, можете зайти на канал: @lookatpatch\n\nПожалуйста, выберите язык / Please choose your language:",
         "language_set": "✅ Язык установлен: *Русский*.",
+        "webcode_sent": "🔑 Код для входа в веб-версию: `{code}`\n\nДействует 10 минут, одноразовый. Введите его на странице входа.",
+        "webcode_sent_with_link": "🔑 Код для входа в веб-версию: `{code}`\n\nДействует 10 минут, одноразовый.\n\n👉 [Открыть веб-версию]({url})",
+        "web_logout": "Выйти",
+        "web_nav_dashboard": "Обзор",
+        "web_net_worth": "Общий капитал",
+        "web_incomplete_rates": "Часть балансов не удалось конвертировать (курсы недоступны) — итог может быть неполным.",
+        "web_all": "Все",
+        "web_date_from": "С",
+        "web_date_to": "По",
+        "web_apply": "Применить",
+        "web_truncated_note": "Показаны первые {n} — сузьте период, чтобы увидеть больше.",
+        "web_balance": "Баланс",
+        "web_no_chart_data": "Недостаточно данных за этот период.",
+        "web_seen_months": "встречалось {months} мес., последний раз {date}",
+        "web_recurring_forecast": "Прогноз регулярных расходов на следующий месяц",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
         "cancel": "❌ Отмена",
@@ -383,3 +413,16 @@ def t(lang: str, key: str, **kwargs) -> str:
         except (KeyError, ValueError):
             pass
     return text
+
+
+def category_label(category_key: str, lang: str) -> str:
+    """Translate a canonical category key (e.g. 'food') into a display label.
+
+    Falls back to returning the value unchanged for anything that isn't a
+    known key — covers transactions/budgets recorded before the bot stored
+    canonical keys, when the category text itself was already the label.
+    Shared by bot.py and webapp.py so both ever have exactly one notion of
+    what a category key displays as.
+    """
+    label = t(lang, f"cat_{category_key}")
+    return category_key if label == f"cat_{category_key}" else label

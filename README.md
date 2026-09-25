@@ -20,6 +20,7 @@ detection. Supports **English** and **Russian** languages.
 | 📊 **Statistics** | Balance, income/expense totals and category breakdown — converted into your base currency, with charts |
 | 🌐 **Bilingual** | Full English 🇬🇧 and Russian 🇷🇺 support |
 | 💱 **Goal Currency Converter** | Convert goal amounts between any supported currency in real-time |
+| 🖥️ **Web Dashboard** | Optional read-only web view (accounts, transactions, stats, budgets, goals, recurring) — see [`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) |
 
 ---
 
@@ -103,10 +104,14 @@ venv/bin/python bot.py   # or: source venv/bin/activate && python bot.py
 ```
 money_manager_bot/
 ├── bot.py              # Main bot logic & Telegram handlers
+├── webapp.py           # Read-only web dashboard (FastAPI), separate process
 ├── database.py         # PostgreSQL access layer (users, accounts, transactions, budgets, goals)
+├── finance.py          # Currency-aware aggregation logic shared by bot.py and webapp.py
 ├── languages.py        # EN/RU translations
 ├── currencies.py       # Live currency/crypto/metals fetching
 ├── charts.py           # Chart generation (goals, category pie, income/expense bar)
+├── templates/           # Jinja2 templates for the web dashboard
+├── static/             # CSS for the web dashboard
 ├── schema.sql          # Reference schema — the source of truth is database.init_db()
 ├── requirements.txt    # Python dependencies
 └── .env.example        # Environment variable template
@@ -171,6 +176,18 @@ sudo systemctl enable money-bot
 sudo systemctl start money-bot
 sudo systemctl status money-bot
 ```
+
+---
+
+## 🖥️ Web Dashboard (optional)
+
+A read-only web view of the same data — accounts, transactions, stats
+with charts, budgets, goals, and the recurring-expense forecast — running
+as its own process alongside the bot. No password: log in with a
+short-lived code from the bot's `/webcode` command. See
+[`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) for installing it,
+running it as a service, and exposing it to the internet via Cloudflare
+Tunnel (no domain or port-forwarding required).
 
 ---
 

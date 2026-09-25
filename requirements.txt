@@ -3,3 +3,10 @@ python-dotenv
 aiohttp
 matplotlib
 psycopg2-binary
+
+# Web dashboard (webapp.py)
+fastapi
+uvicorn[standard]
+jinja2
+itsdangerous
+python-multipart
