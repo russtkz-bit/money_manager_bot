@@ -36,7 +36,10 @@ mcp = FastMCP(
         "to the user's base currency, which each tool's result makes clear."
     ),
     stateless_http=True,
-    streamable_http_path="/",
+    # Default "/mcp" — kept explicit here because webapp.py mounts this
+    # app at the site root (see the comment there for why), so this path
+    # is what actually determines the final public URL: .../mcp.
+    streamable_http_path="/mcp",
 )
 
 
