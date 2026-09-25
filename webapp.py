@@ -289,3 +289,79 @@ async def chart_goals(request: Request):
     if not img:
         return Response(status_code=204)
     return Response(content=img, media_type="image/png")
+
+
+# ─────────────────── BUDGETS ───────────────────
+
+@app.get("/budgets")
+async def budgets_page(request: Request):
+    user_id = require_user(request)
+    lang = db.get_user_lang(user_id)
+    budgets = db.get_budgets(user_id)
+
+    conversion_rates = {"fiat": {}, "crypto": {}, "metals": {}}
+    if budgets:
+        fiat, crypto, metals = await _fetch_rates_safe()
+        conversion_rates = {"fiat": fiat, "crypto": crypto, "metals": metals}
+
+    rows = []
+    any_incomplete = False
+    for b in budgets:
+        spent, all_converted = finance.spent_this_month(user_id, b["category"], b["currency"], conversion_rates)
+        any_incomplete = any_incomplete or not all_converted
+        pct = min(999, round(spent / b["amount"] * 100)) if b["amount"] else 0
+        rows.append({
+            "category": category_label(b["category"], lang),
+            "spent": spent,
+            "amount": b["amount"],
+            "currency": b["currency"],
+            "pct": pct,
+            "pct_display": min(100, pct),
+            "over": spent >= b["amount"],
+        })
+
+    return render(request, "budgets.html", active="budgets", budgets=rows, incomplete=any_incomplete)
+
+
+# ─────────────────── GOALS ───────────────────
+
+@app.get("/goals")
+async def goals_page(request: Request):
+    user_id = require_user(request)
+    lang = db.get_user_lang(user_id)
+    goals = db.get_goals(user_id)
+    type_labels = {
+        "save": translate(lang, "goal_type_save"),
+        "repay": translate(lang, "goal_type_repay"),
+    }
+    rows = []
+    for g in goals:
+        pct = min(100, round(g["current_amount"] / g["target_amount"] * 100)) if g["target_amount"] else 0
+        rows.append({
+            **g,
+            "pct": pct,
+            "type_label": type_labels.get(g["goal_type"], g["goal_type"]),
+        })
+    return render(request, "goals.html", active="goals", goals=rows, has_goals=bool(goals))
+
+
+# ─────────────────── RECURRING / FORECAST ───────────────────
+
+@app.get("/recurring")
+async def recurring_page(request: Request):
+    user_id = require_user(request)
+    lang = db.get_user_lang(user_id)
+    base_currency = db.get_user_base_currency(user_id)
+    fiat, crypto, metals = await _fetch_rates_safe()
+
+    since = (datetime.now().date() - timedelta(days=89)).strftime("%Y-%m-%d")
+    txns = db.get_transactions_filtered(user_id, since)
+    recurring, all_converted = finance.detect_recurring(txns, base_currency, fiat, crypto, metals)
+    total = sum(r["avg_amount"] for r in recurring)
+    rows = [{**r, "category_display": category_label(r["category"], lang)} for r in recurring]
+
+    return render(
+        request, "recurring.html", active="recurring",
+        recurring=rows, total=total, base_currency=base_currency,
+        incomplete=not all_converted,
+    )

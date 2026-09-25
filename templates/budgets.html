@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'btn_budgets') }} — Money Manager{% endblock %}
+{% block content %}
+
+{% if not budgets %}
+  <p class="empty-state">{{ t(lang, 'no_budgets') }}</p>
+{% else %}
+  {% for b in budgets %}
+  <div class="card">
+    <h2>{{ b.category }}</h2>
+    <div class="progress-track">
+      <div class="progress-fill {{ 'over' if b.over else '' }}" style="width: {{ b.pct_display }}%"></div>
+    </div>
+    <div class="muted">{{ "%.2f"|format(b.spent) }} / {{ "%.2f"|format(b.amount) }} {{ b.currency }} ({{ b.pct }}%)</div>
+  </div>
+  {% endfor %}
+  {% if incomplete %}
+    <p class="warning-note">⚠️ {{ t(lang, 'rates_incomplete_note') }}</p>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

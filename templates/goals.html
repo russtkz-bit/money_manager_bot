@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'btn_goals') }} — Money Manager{% endblock %}
+{% block content %}
+
+{% if not has_goals %}
+  <p class="empty-state">{{ t(lang, 'no_goals') }}</p>
+{% else %}
+  <div class="card">
+    <img class="chart-img" src="/stats/chart/goals.png" alt="{{ t(lang, 'chart_goals_title') }}">
+  </div>
+  {% for g in goals %}
+  <div class="card">
+    <h2>{{ '✅ ' if g.completed else '' }}{{ g.title }} <span class="pill">{{ g.type_label }}</span></h2>
+    <div class="progress-track">
+      <div class="progress-fill {{ 'done' if g.completed else '' }}" style="width: {{ g.pct }}%"></div>
+    </div>
+    <div class="muted">
+      {{ "%.2f"|format(g.current_amount) }} / {{ "%.2f"|format(g.target_amount) }} {{ g.currency }} ({{ g.pct }}%)
+      {% if g.deadline %} · {{ g.deadline }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+{% endif %}
+
+{% endblock %}
