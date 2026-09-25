@@ -8,7 +8,7 @@ a different (unsafe) contract on a missing rate. Every frontend (bot.py,
 webapp/) must call through here rather than growing its own copy.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import currencies as cur
@@ -20,6 +20,25 @@ def month_bounds() -> Tuple[str, str]:
     today = datetime.now().date()
     start = today.replace(day=1)
     return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+
+def period_dates(period: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (start, end, bar_grouping) for a named period ('week', 'month',
+    '6m', 'year'); bar_grouping is the label charts.generate_bar_chart
+    expects for its x-axis grouping. (None, None, None) for an unknown
+    period."""
+    today = datetime.now().date()
+    if period == "week":
+        start, bar = today - timedelta(days=6), "week"
+    elif period == "month":
+        start, bar = today - timedelta(days=29), "month"
+    elif period == "6m":
+        start, bar = today - timedelta(days=179), "6months"
+    elif period == "year":
+        start, bar = today - timedelta(days=364), "year"
+    else:
+        return None, None, None
+    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"), bar
 
 
 def convert_or_flag(amount: float, from_currency: str, to_currency: str,

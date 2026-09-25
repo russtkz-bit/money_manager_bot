@@ -24,15 +24,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request, Form, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+import charts as ch
 import currencies as cur
 import database as db
 import finance
 from languages import t as translate, category_label
+
+VALID_PERIODS = ("week", "month", "6m", "year")
 
 ACCOUNT_TYPE_EMOJI = {"bank": "🏦", "crypto": "₿", "cash": "💵"}
 ACCOUNT_TYPE_KEY = {"bank": "account_type_bank", "crypto": "account_type_crypto", "cash": "account_type_cash"}
@@ -181,3 +184,108 @@ async def transactions_page(
         txns=txns, start=start, end=end, type_filter=t_type or "all",
         truncated=truncated, shown_count=len(txns),
     )
+
+
+# ─────────────────── STATS / CHARTS ───────────────────
+
+async def _fetch_rates_safe():
+    try:
+        return await cur.fetch_all_rates()
+    except Exception:
+        return {}, {}, {}
+
+
+def _stats_period(period: Optional[str]) -> str:
+    return period if period in VALID_PERIODS else "month"
+
+
+def _compute_period_data(user_id: int, start: str, end: str, base_currency: str,
+                         fiat: dict, crypto: dict, metals: dict):
+    """Returns (total_income, total_expense, by_cat_labeled, txns_base, incomplete),
+    all amounts converted to base_currency."""
+    lang = db.get_user_lang(user_id)
+    txns = db.get_transactions_filtered(user_id, start, end)
+    total_income = 0.0
+    total_expense = 0.0
+    by_cat: dict = {}
+    txns_base = []
+    incomplete = False
+    for tx in txns:
+        amt, ok = finance.convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
+        incomplete = incomplete or not ok
+        if tx["type"] == "income":
+            total_income += amt
+        else:
+            total_expense += amt
+            label = category_label(tx["category"], lang)
+            by_cat[label] = by_cat.get(label, 0) + amt
+        txns_base.append({**tx, "amount": amt, "currency": base_currency})
+    return total_income, total_expense, by_cat, txns_base, incomplete
+
+
+@app.get("/stats")
+async def stats_page(request: Request, period: Optional[str] = None):
+    user_id = require_user(request)
+    period = _stats_period(period)
+    base_currency = db.get_user_base_currency(user_id)
+    start, end, _ = finance.period_dates(period)
+
+    fiat, crypto, metals = await _fetch_rates_safe()
+    total_income, total_expense, by_cat, txns_base, incomplete = _compute_period_data(
+        user_id, start, end, base_currency, fiat, crypto, metals
+    )
+    goals = db.get_goals(user_id)
+
+    return render(
+        request, "stats.html", active="stats",
+        period=period, start=start, end=end,
+        total_income=total_income, total_expense=total_expense,
+        balance=total_income - total_expense,
+        base_currency=base_currency, incomplete=incomplete,
+        has_data=bool(txns_base), has_categories=bool(by_cat), has_goals=bool(goals),
+    )
+
+
+@app.get("/stats/chart/pie.png")
+async def chart_pie(request: Request, period: Optional[str] = None):
+    user_id = require_user(request)
+    period = _stats_period(period)
+    base_currency = db.get_user_base_currency(user_id)
+    start, end, _ = finance.period_dates(period)
+    fiat, crypto, metals = await _fetch_rates_safe()
+    _, _, by_cat, _, _ = _compute_period_data(user_id, start, end, base_currency, fiat, crypto, metals)
+    lang = db.get_user_lang(user_id)
+    img = ch.generate_pie_chart(by_cat, title=translate(lang, "chart_pie_title")) if by_cat else None
+    if not img:
+        return Response(status_code=204)
+    return Response(content=img, media_type="image/png")
+
+
+@app.get("/stats/chart/bar.png")
+async def chart_bar(request: Request, period: Optional[str] = None):
+    user_id = require_user(request)
+    period = _stats_period(period)
+    base_currency = db.get_user_base_currency(user_id)
+    start, end, bar_period = finance.period_dates(period)
+    fiat, crypto, metals = await _fetch_rates_safe()
+    _, _, _, txns_base, _ = _compute_period_data(user_id, start, end, base_currency, fiat, crypto, metals)
+    lang = db.get_user_lang(user_id)
+    img = ch.generate_bar_chart(
+        txns_base, bar_period,
+        income_label=translate(lang, "income"), expense_label=translate(lang, "expense"),
+        title=translate(lang, "chart_bar_title"),
+    ) if txns_base else None
+    if not img:
+        return Response(status_code=204)
+    return Response(content=img, media_type="image/png")
+
+
+@app.get("/stats/chart/goals.png")
+async def chart_goals(request: Request):
+    user_id = require_user(request)
+    goals = db.get_goals(user_id)
+    lang = db.get_user_lang(user_id)
+    img = ch.generate_goals_chart(goals, title=translate(lang, "chart_goals_title")) if goals else None
+    if not img:
+        return Response(status_code=204)
+    return Response(content=img, media_type="image/png")

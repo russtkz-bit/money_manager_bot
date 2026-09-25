@@ -550,19 +550,7 @@ async def handle_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def _period_dates(period: str):
-    today = datetime.now().date()
-    if period == "week":
-        start, bar = today - timedelta(days=6), "week"
-    elif period == "month":
-        start, bar = today - timedelta(days=29), "month"
-    elif period == "6m":
-        start, bar = today - timedelta(days=179), "6months"
-    elif period == "year":
-        start, bar = today - timedelta(days=364), "year"
-    else:
-        return None, None, None
-    return start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"), bar
+_period_dates = finance.period_dates
 
 
 async def _send_charts(update, context, uid, start_date, end_date, bar_period, period_label, chart_types=None):
