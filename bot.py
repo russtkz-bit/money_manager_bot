@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from io import BytesIO
 
+import aiohttp
 from dotenv import load_dotenv
 
 # Must run before importing database: database.py reads DATABASE_URL from
@@ -436,13 +437,43 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, uid)
 
 
+async def _current_web_url() -> str:
+    """Best-effort discovery of the dashboard's current public URL.
+
+    A Cloudflare *quick* tunnel (the zero-config option in
+    deploy/WEBAPP_SETUP.md) prints a fresh random *.trycloudflare.com
+    hostname every time it restarts, so a URL baked into WEB_BASE_URL at
+    setup time silently goes stale on the next restart. cloudflared's
+    local metrics server exposes the live quick-tunnel hostname at
+    /quicktunnel, so that's tried first — it only answers for an actual
+    quick tunnel, so a named tunnel (stable custom domain, no such
+    endpoint) falls straight through to WEB_BASE_URL below, which is the
+    right source there since that URL never changes.
+    """
+    metrics_port = os.getenv("CLOUDFLARED_METRICS_PORT", "20241")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{metrics_port}/quicktunnel",
+                timeout=aiohttp.ClientTimeout(total=1.5)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    hostname = data.get("hostname")
+                    if hostname:
+                        return f"https://{hostname}"
+    except Exception:
+        pass
+    return os.getenv("WEB_BASE_URL", "").rstrip("/")
+
+
 async def cmd_webcode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Issues a short-lived, single-use code for logging into the web dashboard."""
     uid = update.effective_user.id
     db.ensure_user(uid)
     l    = lang(uid)
     code = db.create_web_login_code(uid)
-    web_url = os.getenv("WEB_BASE_URL", "").rstrip("/")
+    web_url = await _current_web_url()
     if web_url:
         text = t(l, "webcode_sent_with_link", code=code, url=f"{web_url}/login")
     else:

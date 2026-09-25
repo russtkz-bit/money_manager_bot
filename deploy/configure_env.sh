@@ -96,12 +96,23 @@ else
   BASE_URL="${EXISTING[WEB_BASE_URL]:-}"
 fi
 
+# ── CLOUDFLARED_METRICS_PORT (web dashboard, optional) ──
+# Only needed if you changed --metrics away from the 20241 default in
+# money-tunnel.service; bot.py already falls back to 20241 on its own, so
+# this is left out of .env entirely unless set.
+if [[ -n "${CLOUDFLARED_METRICS_PORT:-}" ]]; then
+  METRICS_PORT="$CLOUDFLARED_METRICS_PORT"
+else
+  METRICS_PORT="${EXISTING[CLOUDFLARED_METRICS_PORT]:-}"
+fi
+
 umask 077
 {
   echo "TELEGRAM_BOT_TOKEN=${TOKEN}"
   echo "DATABASE_URL=${DB_URL}"
   echo "SESSION_SECRET=${SECRET}"
   echo "WEB_BASE_URL=${BASE_URL}"
+  [[ -n "$METRICS_PORT" ]] && echo "CLOUDFLARED_METRICS_PORT=${METRICS_PORT}"
 } > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
