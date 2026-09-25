@@ -15,12 +15,14 @@ detection. Supports **English** and **Russian** languages.
 | 💸 **Transactions** | Add income/expense per account, with category and description |
 | 📐 **Budgets** | Set a monthly limit per category; get warned in-chat when you're near or over it |
 | 🎯 **Goals** | Set savings or loan repayment goals with deadlines, tracked against your account balances |
-| 🔁 **Recurring & Forecast** | Detects expenses that repeat month over month and estimates next month's recurring spend |
+| 🔁 **Recurring Expenses** | Detects expenses that repeat month over month and estimates next month's recurring spend |
+| 📈 **Net Worth Forecast** | "If nothing changes" projection — extends your recent average monthly income/expense forward to show where your net worth is headed |
+| 📥 **CSV Statement Import** | Import a bank/card CSV export into an account — auto-detects date/amount columns (EN & RU headers, EU/US number formats), skips rows already imported |
 | 💱 **Live Currencies** | Real-time rates: fiat, crypto (BTC/ETH/SOL/TON…), gold & silver |
 | 📊 **Statistics** | Balance, income/expense totals and category breakdown — converted into your base currency, with charts |
 | 🌐 **Bilingual** | Full English 🇬🇧 and Russian 🇷🇺 support |
 | 💱 **Goal Currency Converter** | Convert goal amounts between any supported currency in real-time |
-| 🖥️ **Web Dashboard** | Optional read-only web view (accounts, transactions, stats, budgets, goals, recurring) — see [`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) |
+| 🖥️ **Web Dashboard** | Optional read-only web view (accounts, transactions, stats, budgets, goals, recurring, forecast) — see [`deploy/WEBAPP_SETUP.md`](deploy/WEBAPP_SETUP.md) |
 
 ---
 
@@ -107,9 +109,10 @@ money_manager_bot/
 ├── webapp.py           # Read-only web dashboard (FastAPI), separate process
 ├── database.py         # PostgreSQL access layer (users, accounts, transactions, budgets, goals)
 ├── finance.py          # Currency-aware aggregation logic shared by bot.py and webapp.py
+├── csv_import.py       # Bank/card CSV statement parser (used by bot.py's import flow)
 ├── languages.py        # EN/RU translations
 ├── currencies.py       # Live currency/crypto/metals fetching
-├── charts.py           # Chart generation (goals, category pie, income/expense bar)
+├── charts.py           # Chart generation (goals, category pie, income/expense bar, net worth forecast)
 ├── templates/           # Jinja2 templates for the web dashboard
 ├── static/             # CSS for the web dashboard
 ├── schema.sql          # Reference schema — the source of truth is database.init_db()

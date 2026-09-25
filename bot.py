@@ -6,6 +6,7 @@ Tracks income/expenses via accounts, manages goals, currencies, and financial st
 import os
 import asyncio
 import logging
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Optional
 from io import BytesIO
@@ -29,6 +30,7 @@ import database as db
 import currencies as cur
 import charts as ch
 import finance
+import csv_import
 from languages import t, category_label
 
 logging.basicConfig(
@@ -70,7 +72,10 @@ logger = logging.getLogger(__name__)
 
     # Budget flow
     S_BUDGET_CATEGORY, S_BUDGET_AMOUNT, S_BUDGET_SELECT_DELETE,
-) = range(27)
+
+    # CSV statement import
+    S_IMPORT_ACCOUNT, S_IMPORT_FILE, S_IMPORT_CONFIRM,
+) = range(30)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -125,6 +130,7 @@ def accounts_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_add_account"),    callback_data="account_add")],
         [InlineKeyboardButton(t(l, "btn_view_accounts"),  callback_data="account_view")],
         [InlineKeyboardButton(t(l, "btn_delete_account"), callback_data="account_delete")],
+        [InlineKeyboardButton(t(l, "btn_import_csv"),     callback_data="account_import_csv")],
         [InlineKeyboardButton(t(l, "back"),               callback_data="back_main")],
     ])
 
@@ -265,6 +271,7 @@ def stats_period_keyboard(uid: int) -> InlineKeyboardMarkup:
          InlineKeyboardButton(t(l, "stats_period_year"),   callback_data="stats_p_year")],
         [InlineKeyboardButton(t(l, "stats_period_custom"), callback_data="stats_p_custom")],
         [InlineKeyboardButton(t(l, "stats_recurring"),     callback_data="stats_recurring")],
+        [InlineKeyboardButton(t(l, "btn_forecast"),        callback_data="stats_forecast")],
         [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
     ])
 
@@ -708,6 +715,53 @@ async def cb_stats_recurring(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def cb_stats_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    await query.edit_message_text(t(l, "forecast_generating"), parse_mode=ParseMode.MARKDOWN)
+
+    base_currency = db.get_user_base_currency(uid)
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "forecast_no_data"),
+            reply_markup=back_keyboard(uid, "back_stats"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    fiat, crypto, metals = {}, {}, {}
+    try:
+        fiat, crypto, metals = await cur.fetch_all_rates()
+    except Exception:
+        pass
+
+    forecast = finance.forecast_net_worth(uid, base_currency, fiat, crypto, metals, accounts=accounts)
+
+    text = t(l, "forecast_header")
+    text += t(l, "forecast_current", amount=f"{forecast['current']:,.2f}", currency=base_currency)
+    if forecast["monthly_net"] >= 0:
+        text += t(l, "forecast_monthly_net_positive", amount=f"{forecast['monthly_net']:,.2f}", currency=base_currency)
+    else:
+        text += t(l, "forecast_monthly_net_negative", amount=f"{forecast['monthly_net']:,.2f}", currency=base_currency)
+    months_ahead = forecast["points"][-1][0]
+    text += t(l, "forecast_projection",
+             months=months_ahead, amount=f"{forecast['points'][-1][1]:,.2f}", currency=base_currency)
+    if not forecast["all_converted"]:
+        text += "\n" + t(l, "rates_incomplete_note")
+
+    img = ch.generate_forecast_chart(forecast["points"], base_currency, title=t(l, "btn_forecast"))
+    if img:
+        await context.bot.send_photo(chat_id=uid, photo=BytesIO(img))
+    await context.bot.send_message(
+        chat_id=uid, text=text,
+        reply_markup=back_keyboard(uid, "back_stats"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
 async def cb_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1073,6 +1127,150 @@ async def account_select_delete(update: Update, context: ContextTypes.DEFAULT_TY
     db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "account_deleted"),
+        reply_markup=back_keyboard(uid, "menu_accounts"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
+# ─────────────────── CSV STATEMENT IMPORT ───────────────────
+
+async def import_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "no_accounts"),
+            reply_markup=back_keyboard(uid, "menu_accounts"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "import_choose_account"),
+        reply_markup=accounts_select_keyboard(accounts, "impacc", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_IMPORT_ACCOUNT
+
+
+async def import_account_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query      = update.callback_query
+    await query.answer()
+    uid        = query.from_user.id
+    l          = lang(uid)
+    account_id = int(query.data.split("_")[1])
+    acc = db.get_account(account_id)
+    context.user_data["import_account_id"]       = account_id
+    context.user_data["import_account_name"]     = acc["name"] if acc else "?"
+    context.user_data["import_account_currency"] = acc["currency"] if acc else "USD"
+    await query.edit_message_text(
+        t(l, "import_send_file"),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_IMPORT_FILE
+
+
+async def import_file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    doc = update.message.document
+    if not doc or not (doc.file_name or "").lower().endswith(".csv"):
+        await update.message.reply_text(t(l, "import_wrong_file_type"))
+        return S_IMPORT_FILE
+
+    tg_file = await context.bot.get_file(doc.file_id)
+    raw = bytes(await tg_file.download_as_bytearray())
+
+    try:
+        rows, errors = csv_import.parse_statement(raw)
+    except csv_import.CsvImportError as e:
+        key = f"import_parse_error_{e}"
+        translated = t(l, key)
+        await update.message.reply_text(translated if translated != key else t(l, "import_parse_error_generic"))
+        return S_IMPORT_FILE
+
+    if not rows:
+        await update.message.reply_text(t(l, "import_no_valid_rows"))
+        return S_IMPORT_FILE
+
+    account_id = context.user_data["import_account_id"]
+    dates = [r["date"] for r in rows]
+    existing = db.get_existing_transaction_signatures(uid, account_id, min(dates), max(dates))
+
+    # existing is a count per signature, not just a yes/no set — two rows in
+    # this file that happen to share a signature (e.g. two identical same-day
+    # coffee purchases) must each be checked against how many matches are
+    # already in the DB, or a real repeat transaction gets skipped as a
+    # false duplicate. `seen` tracks how many duplicate-credits this file
+    # has already consumed per signature.
+    seen = Counter()
+    to_import = []
+    duplicates = 0
+    for r in rows:
+        sig = (r["date"], r["amount"], r["type"], r["description"])
+        seen[sig] += 1
+        if seen[sig] <= existing.get(sig, 0):
+            duplicates += 1
+            continue
+        to_import.append(r)
+
+    income_n  = sum(1 for r in rows if r["type"] == "income")
+    expense_n = sum(1 for r in rows if r["type"] == "expense")
+    account_name = context.user_data.get("import_account_name", "?")
+
+    if not to_import:
+        await update.message.reply_text(
+            t(l, "import_preview",
+              found=len(rows), income=income_n, expense=expense_n,
+              duplicates=duplicates, errors=len(errors),
+              to_import=0, account=account_name),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    context.user_data["import_rows"] = to_import
+    await update.message.reply_text(
+        t(l, "import_preview",
+          found=len(rows), income=income_n, expense=expense_n,
+          duplicates=duplicates, errors=len(errors),
+          to_import=len(to_import), account=account_name),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(l, "import_confirm_btn"), callback_data="import_confirm")],
+            [InlineKeyboardButton(t(l, "cancel"),              callback_data="conv_cancel")],
+        ]),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_IMPORT_CONFIRM
+
+
+async def import_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    account_id    = context.user_data.get("import_account_id")
+    currency      = context.user_data.get("import_account_currency", "USD")
+    account_name  = context.user_data.get("import_account_name", "?")
+    rows          = context.user_data.get("import_rows", [])
+
+    db.add_transactions_bulk(uid, account_id, currency, rows)
+
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
+    db.recalculate_all_goals(uid, conversion_rates)
+
+    context.user_data.pop("import_rows", None)
+    context.user_data.pop("import_account_id", None)
+    context.user_data.pop("import_account_name", None)
+    context.user_data.pop("import_account_currency", None)
+
+    await query.edit_message_text(
+        t(l, "import_done", count=len(rows), account=account_name),
         reply_markup=back_keyboard(uid, "menu_accounts"),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -1817,6 +2015,27 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Import CSV statement ──
+    import_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(import_start, pattern="^account_import_csv$")],
+        states={
+            S_IMPORT_ACCOUNT: [
+                CallbackQueryHandler(import_account_chosen, pattern="^impacc_"),
+            ],
+            S_IMPORT_FILE: [
+                MessageHandler(filters.Document.ALL, import_file_received),
+            ],
+            S_IMPORT_CONFIRM: [
+                CallbackQueryHandler(import_confirm, pattern="^import_confirm$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Delete account ──
     account_delete_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(account_delete_start, pattern="^account_delete$")],
@@ -1952,7 +2171,7 @@ def build_application() -> Application:
     for conv in [
         stats_custom_conv,
         trans_delete_conv, trans_conv,
-        account_add_conv, account_delete_conv,
+        account_add_conv, account_delete_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
@@ -1979,6 +2198,7 @@ def build_application() -> Application:
 
     app.add_handler(CallbackQueryHandler(cb_stats_period,    pattern="^stats_p_(week|month|6m|year)$"))
     app.add_handler(CallbackQueryHandler(cb_stats_recurring, pattern="^stats_recurring$"))
+    app.add_handler(CallbackQueryHandler(cb_stats_forecast,  pattern="^stats_forecast$"))
     app.add_handler(CallbackQueryHandler(cb_schrt_toggle,    pattern="^schrt_toggle_"))
     app.add_handler(CallbackQueryHandler(cb_schrt_generate,  pattern="^schrt_generate$"))
 

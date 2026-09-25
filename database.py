@@ -8,6 +8,7 @@ Connection is configured via the DATABASE_URL environment variable:
 import os
 import logging
 import secrets
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
@@ -274,17 +275,83 @@ def get_accounts_with_balances(user_id: int) -> List[Dict]:
 
 def add_transaction(user_id: int, t_type: str, amount: float,
                     currency: str, category: str, description: str = "",
-                    account_id: Optional[int] = None) -> int:
+                    account_id: Optional[int] = None,
+                    created_at: Optional[str] = None) -> int:
+    """created_at (YYYY-MM-DD) backdates the transaction — used by CSV import
+    to record the statement's own date instead of the import time. Omit it
+    for the normal "now" default."""
     ensure_user(user_id)
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO transactions "
-                "(user_id, account_id, type, amount, currency, category, description) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (user_id, account_id, t_type, amount, currency, category, description)
-            )
+            if created_at:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (user_id, account_id, t_type, amount, currency, category, description, created_at)
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (user_id, account_id, t_type, amount, currency, category, description)
+                )
             return cur.fetchone()["id"]
+
+
+def get_existing_transaction_signatures(user_id: int, account_id: int,
+                                         start_date: str, end_date: str) -> "Counter":
+    """Counts, per (date, amount, type, description) signature, how many
+    matching transactions already exist for this account/date range — lets
+    CSV import skip rows it already imported on a previous run.
+
+    A plain set of signatures would undercount: if two genuinely distinct
+    transactions share an identical signature (e.g. two identical $5
+    coffee purchases the same day), a set collapses them into one entry,
+    and a later import containing both would have BOTH treated as
+    duplicates of that single existing row, silently dropping a real
+    transaction. Counting lets the caller consume one duplicate credit per
+    match instead."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT created_at::date AS d, amount, type, description FROM transactions "
+                "WHERE user_id=%s AND account_id=%s AND created_at::date BETWEEN %s AND %s",
+                (user_id, account_id, start_date, end_date)
+            )
+            return Counter(
+                (r["d"].strftime("%Y-%m-%d"), float(r["amount"]), r["type"], r["description"] or "")
+                for r in cur.fetchall()
+            )
+
+
+def add_transactions_bulk(user_id: int, account_id: int, currency: str,
+                          rows: List[Dict]) -> int:
+    """Insert many CSV-imported rows ({"date","amount","type","description"})
+    over a single connection instead of one connect/commit/close cycle per
+    row — add_transaction() is fine for one-off inserts from the chat flow,
+    but a multi-thousand-row import reopening a fresh Postgres connection
+    per row would be needlessly slow. Category is always "other": imported
+    rows carry no category info, the user can re-categorize afterward.
+    Returns the number of rows inserted."""
+    if not rows:
+        return 0
+    ensure_user(user_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO transactions "
+                "(user_id, account_id, type, amount, currency, category, description, created_at) "
+                "VALUES %s",
+                [
+                    (user_id, account_id, r["type"], r["amount"], currency, "other",
+                     r["description"], r["date"])
+                    for r in rows
+                ],
+            )
+    return len(rows)
 
 
 def get_transactions(user_id: int, limit: int = 20) -> List[Dict]:
