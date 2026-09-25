@@ -6,6 +6,7 @@ Tracks income/expenses via accounts, manages goals, currencies, and financial st
 import os
 import asyncio
 import logging
+from collections import Counter
 from datetime import datetime, timedelta
 from typing import Optional
 from io import BytesIO
@@ -1202,11 +1203,19 @@ async def import_file_received(update: Update, context: ContextTypes.DEFAULT_TYP
     dates = [r["date"] for r in rows]
     existing = db.get_existing_transaction_signatures(uid, account_id, min(dates), max(dates))
 
+    # existing is a count per signature, not just a yes/no set — two rows in
+    # this file that happen to share a signature (e.g. two identical same-day
+    # coffee purchases) must each be checked against how many matches are
+    # already in the DB, or a real repeat transaction gets skipped as a
+    # false duplicate. `seen` tracks how many duplicate-credits this file
+    # has already consumed per signature.
+    seen = Counter()
     to_import = []
     duplicates = 0
     for r in rows:
         sig = (r["date"], r["amount"], r["type"], r["description"])
-        if sig in existing:
+        seen[sig] += 1
+        if seen[sig] <= existing.get(sig, 0):
             duplicates += 1
             continue
         to_import.append(r)
@@ -1250,12 +1259,7 @@ async def import_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account_name  = context.user_data.get("import_account_name", "?")
     rows          = context.user_data.get("import_rows", [])
 
-    for r in rows:
-        # Imported rows carry no category info, so they land in "other" —
-        # the user can re-categorize individual transactions afterward.
-        db.add_transaction(uid, r["type"], r["amount"], currency, "other",
-                           description=r["description"], account_id=account_id,
-                           created_at=r["date"])
+    db.add_transactions_bulk(uid, account_id, currency, rows)
 
     conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
     db.recalculate_all_goals(uid, conversion_rates)

@@ -67,7 +67,11 @@ def _parse_amount(raw: str) -> Optional[float]:
             raw = raw.replace(",", "")
     elif "," in raw:
         parts = raw.split(",")
-        if len(parts[-1]) == 2:
+        # A thousands separator always groups digits in 3s, so any other
+        # trailing group length (most commonly 1 or 2, e.g. "12,5" or
+        # "12,50") can only be a decimal comma — treating "== 2" as the
+        # only decimal case silently mis-parsed "12,5" as 125.
+        if len(parts[-1]) != 3:
             raw = raw.replace(",", ".")
         else:
             raw = raw.replace(",", "")
