@@ -7,9 +7,12 @@ it, exposing it publicly without a domain or port-forwarding (Cloudflare
 Tunnel), and the systemd services for both.
 
 Everything here was verified locally (FastAPI TestClient + a real uvicorn
-server) **except the actual Cloudflare tunnel creation**, which is an
-interactive browser login that can't be scripted or tested from an
-automated session — verify that part yourself the first time you run it.
+server) **except cloudflared itself** — installing the package and
+creating a tunnel both need outbound internet access this session
+doesn't have, so neither step was exercised end-to-end. The install
+script follows Cloudflare's own documented method and the doc below
+matches their current instructions, but verify both steps yourself the
+first time you run them.
 
 ## 1. Install dependencies
 
