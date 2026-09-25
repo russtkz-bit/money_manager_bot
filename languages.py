@@ -106,6 +106,12 @@ LANGUAGES = {
 
         # Goals
         "choose_goal_type": "Choose goal type:",
+        "goal_type_save": "💰 Save up",
+        "goal_type_repay": "🏦 Repay a loan/debt",
+        "enter_goal_title": "📝 Enter goal title (e.g. 'Buy a car', 'Pay off loan'):",
+        "enter_goal_amount": "💵 Enter the target amount:",
+        "enter_goal_currency": "💱 Choose a currency for this goal:",
+        "enter_goal_deadline": "📅 Enter deadline (YYYY-MM-DD) or /skip:",
         "goal_saved": "✅ Goal created!\n\n*{title}*\nTarget: {amount} {currency}\nDeadline: {deadline}\n\n📊 Starting progress: {initial} ({pct}%)",
         "no_goals": "📭 No goals set yet.",
         "goals_header": "🎯 *Your Goals:*\n\n",
