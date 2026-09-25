@@ -9,6 +9,11 @@ LANGUAGES = {
         "web_nav_dashboard": "Overview",
         "web_net_worth": "Net worth",
         "web_incomplete_rates": "Some balances couldn't be converted (rates unavailable) — total may be incomplete.",
+        "web_all": "All",
+        "web_date_from": "From",
+        "web_date_to": "To",
+        "web_apply": "Apply",
+        "web_truncated_note": "Showing the first {n} — narrow the date range to see more.",
         "main_menu": "🏠 *Main Menu*\n\nWhat would you like to do?",
         "back": "⬅️ Back",
         "cancel": "❌ Cancel",
@@ -202,6 +207,11 @@ LANGUAGES = {
         "web_nav_dashboard": "Обзор",
         "web_net_worth": "Общий капитал",
         "web_incomplete_rates": "Часть балансов не удалось конвертировать (курсы недоступны) — итог может быть неполным.",
+        "web_all": "Все",
+        "web_date_from": "С",
+        "web_date_to": "По",
+        "web_apply": "Применить",
+        "web_truncated_note": "Показаны первые {n} — сузьте период, чтобы увидеть больше.",
         "main_menu": "🏠 *Главное меню*\n\nЧто вы хотите сделать?",
         "back": "⬅️ Назад",
         "cancel": "❌ Отмена",
@@ -395,3 +405,16 @@ def t(lang: str, key: str, **kwargs) -> str:
         except (KeyError, ValueError):
             pass
     return text
+
+
+def category_label(category_key: str, lang: str) -> str:
+    """Translate a canonical category key (e.g. 'food') into a display label.
+
+    Falls back to returning the value unchanged for anything that isn't a
+    known key — covers transactions/budgets recorded before the bot stored
+    canonical keys, when the category text itself was already the label.
+    Shared by bot.py and webapp.py so both ever have exactly one notion of
+    what a category key displays as.
+    """
+    label = t(lang, f"cat_{category_key}")
+    return category_key if label == f"cat_{category_key}" else label

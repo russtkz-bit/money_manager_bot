@@ -29,7 +29,7 @@ import database as db
 import currencies as cur
 import charts as ch
 import finance
-from languages import t
+from languages import t, category_label
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -394,17 +394,6 @@ def _budget_warning_text(uid: int, category_key: str, conversion_rates: dict, l:
     if not all_converted:
         lines.append(t(l, "rates_incomplete_note"))
     return ("\n\n" + "\n".join(lines)) if lines else ""
-
-
-def category_label(category_key: str, l: str) -> str:
-    """Translate a canonical category key (e.g. 'food') into a display label.
-
-    Falls back to returning the value unchanged for anything that isn't a
-    known key — covers transactions/budgets recorded before this bot stored
-    canonical keys, when the category text itself was already the label.
-    """
-    label = t(l, f"cat_{category_key}")
-    return category_key if label == f"cat_{category_key}" else label
 
 
 # ─────────────────── START / WELCOME ───────────────────

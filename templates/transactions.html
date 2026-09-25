@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ t(lang, 'btn_transactions') }} — Money Manager{% endblock %}
+{% block content %}
+
+<form class="filters" method="get" action="/transactions">
+  <input type="date" name="start" value="{{ start }}">
+  <input type="date" name="end" value="{{ end }}">
+  <select name="type">
+    <option value="all" {{ 'selected' if type_filter == 'all' }}>{{ t(lang, 'web_all') }}</option>
+    <option value="income" {{ 'selected' if type_filter == 'income' }}>{{ t(lang, 'income') }}</option>
+    <option value="expense" {{ 'selected' if type_filter == 'expense' }}>{{ t(lang, 'expense') }}</option>
+  </select>
+  <button type="submit">{{ t(lang, 'web_apply') }}</button>
+</form>
+
+<div class="card">
+  {% if not txns %}
+    <p class="empty-state">{{ t(lang, 'no_transactions') }}</p>
+  {% else %}
+    <table>
+      <tbody>
+        {% for tx in txns %}
+        <tr class="{{ 'row-income' if tx.type == 'income' else 'row-expense' }}">
+          <td>
+            {{ '📈' if tx.type == 'income' else '📉' }}
+            <strong>{{ "%.2f"|format(tx.amount) }} {{ tx.currency }}</strong>
+            <span class="pill">{{ tx.category_display }}</span><br>
+            <span class="muted">{{ tx.date_display }} · {{ tx.account_name }}{% if tx.description %} · {{ tx.description }}{% endif %}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if truncated %}
+      <p class="muted">{{ t(lang, 'web_truncated_note', n=shown_count) }}</p>
+    {% endif %}
+  {% endif %}
+</div>
+
+{% endblock %}

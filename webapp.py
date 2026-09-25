@@ -14,6 +14,8 @@ sibling doc for the web app, deploy/WEBAPP_SETUP.md.
 """
 
 import os
+from datetime import datetime, timedelta
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -21,7 +23,7 @@ from dotenv import load_dotenv
 # the environment at import time, so .env must be loaded first.
 load_dotenv()
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Query
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,7 +32,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import currencies as cur
 import database as db
 import finance
-from languages import t as translate
+from languages import t as translate, category_label
 
 ACCOUNT_TYPE_EMOJI = {"bank": "🏦", "crypto": "₿", "cash": "💵"}
 ACCOUNT_TYPE_KEY = {"bank": "account_type_bank", "crypto": "account_type_crypto", "cash": "account_type_cash"}
@@ -136,4 +138,46 @@ async def dashboard(request: Request):
         base_currency=base_currency,
         net_worth=total,
         net_worth_incomplete=not all_converted,
+    )
+
+
+# ─────────────────── TRANSACTIONS ───────────────────
+
+MAX_TRANSACTIONS_SHOWN = 300
+
+
+@app.get("/transactions")
+async def transactions_page(
+    request: Request,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    t_type: Optional[str] = Query(None, alias="type"),
+):
+    user_id = require_user(request)
+    lang = db.get_user_lang(user_id)
+
+    if not start or not end:
+        today = datetime.now().date()
+        start = (today - timedelta(days=29)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+
+    txns = db.get_transactions_filtered(user_id, start, end)
+    txns = sorted(txns, key=lambda tx: tx["created_at"], reverse=True)
+
+    if t_type in ("income", "expense"):
+        txns = [tx for tx in txns if tx["type"] == t_type]
+
+    truncated = len(txns) > MAX_TRANSACTIONS_SHOWN
+    txns = txns[:MAX_TRANSACTIONS_SHOWN]
+
+    account_names = {a["id"]: a["name"] for a in db.get_accounts(user_id)}
+    for tx in txns:
+        tx["category_display"] = category_label(tx["category"], lang)
+        tx["account_name"] = account_names.get(tx["account_id"], "—")
+        tx["date_display"] = (tx["created_at"] or "")[:10]
+
+    return render(
+        request, "transactions.html", active="transactions",
+        txns=txns, start=start, end=end, type_filter=t_type or "all",
+        truncated=truncated, shown_count=len(txns),
     )
