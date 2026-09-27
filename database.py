@@ -436,6 +436,44 @@ def update_transaction_category(transaction_id: int, category: str):
             )
 
 
+def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
+    """Replaces one transaction with several, each carrying its own share
+    of the amount and its own category — everything else (account, type,
+    currency, date, description) copied from the original. `parts` is
+    [{"amount": float, "category": str}, ...] and the caller is
+    responsible for making them sum to the original amount; this function
+    just executes the split, it doesn't re-check the arithmetic.
+
+    Deliberately not a new schema (a "splits" table, a parent/child link on
+    transactions) — every existing budget/stats/recurring/export query
+    already aggregates by plain (category, amount) rows, so N ordinary
+    transactions that happen to add up to what one used to be need zero
+    changes anywhere else. Runs as one connection/transaction, so a crash
+    mid-way rolls back to the original single transaction rather than
+    leaving it deleted with only some parts inserted.
+
+    Returns the new transaction ids, or [] if transaction_id didn't exist.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM transactions WHERE id=%s", (transaction_id,))
+            orig = cur.fetchone()
+            if not orig:
+                return []
+            cur.execute("DELETE FROM transactions WHERE id=%s", (transaction_id,))
+            new_ids = []
+            for part in parts:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (orig["user_id"], orig["account_id"], orig["type"], part["amount"],
+                     orig["currency"], part["category"], orig["description"], orig["created_at"])
+                )
+                new_ids.append(cur.fetchone()["id"])
+            return new_ids
+
+
 def delete_all_transactions(user_id: int) -> int:
     with get_connection() as conn:
         with conn.cursor() as cur:

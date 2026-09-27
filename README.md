@@ -15,6 +15,7 @@ detection. Supports **English** and **Russian** languages.
 | 💸 **Transactions** | Add income/expense per account, with category and description |
 | 🏷 **Custom Categories** | Add your own categories (name + emoji, scoped to income/expense/both) — they show up alongside the built-in ones everywhere |
 | 📜 **Transaction History Export** | Pick a period (week/month/6 months/year); a week shows inline in chat, longer periods are sent as a personal CSV file |
+| 🔀 **Split Transaction** | Divide one transaction's amount across several categories (e.g. a shopping trip split into food + household) |
 | 📐 **Budgets** | Set a monthly limit per category; get warned in-chat when you're near or over it |
 | 🎯 **Goals** | Set savings or loan repayment goals with deadlines, tracked against your account balances |
 | 🔁 **Recurring Expenses** | Detects expenses that repeat month over month and estimates next month's recurring spend |

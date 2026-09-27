@@ -49,6 +49,7 @@ LANGUAGES = {
         "btn_transaction_history": "📜 Export History",
         "btn_clear_transactions": "🗑️ Clear All",
         "btn_delete_transaction": "🗑 Delete Transaction",
+        "btn_split_transaction": "🔀 Split Transaction",
         "btn_edit_transaction_category": "✏️ Edit Transaction Category",
         "btn_add_goal": "🎯 Add Goal",
         "btn_view_goals": "📋 View Goals",
@@ -127,6 +128,11 @@ LANGUAGES = {
         "choose_transaction_to_edit_category": "✏️ *Choose a transaction to re-categorize:*\n_(showing last 20)_",
         "choose_new_category": "Choose the new category:",
         "transaction_category_updated": "✅ Category changed to *{category}*.",
+        "choose_transaction_to_split": "🔀 *Choose a transaction to split:*\n_(showing last 20)_",
+        "split_enter_amount": "🔀 Splitting *{total} {currency}*\nRemaining to allocate: *{remaining} {currency}*\n\nEnter the amount for this part:",
+        "split_invalid_amount": "⚠️ Enter an amount from 0 to {remaining} {currency}.",
+        "split_finish_btn": "✅ Rest goes here ({amount} {currency})",
+        "split_done": "✅ Split into {count} parts:",
         "recalculating_goals": "⏳ Deleting and recalculating goals…",
 
         # Categories
@@ -325,6 +331,7 @@ LANGUAGES = {
         "btn_transaction_history": "📜 Выгрузка за период",
         "btn_clear_transactions": "🗑️ Удалить все",
         "btn_delete_transaction": "🗑 Удалить транзакцию",
+        "btn_split_transaction": "🔀 Разделить транзакцию",
         "btn_edit_transaction_category": "✏️ Изменить категорию транзакции",
         "btn_add_goal": "🎯 Добавить цель",
         "btn_view_goals": "📋 Мои цели",
@@ -403,6 +410,11 @@ LANGUAGES = {
         "choose_transaction_to_edit_category": "✏️ *Выберите транзакцию для смены категории:*\n_(последние 20)_",
         "choose_new_category": "Выберите новую категорию:",
         "transaction_category_updated": "✅ Категория изменена на *{category}*.",
+        "choose_transaction_to_split": "🔀 *Выберите транзакцию для разделения:*\n_(последние 20)_",
+        "split_enter_amount": "🔀 Разделяем *{total} {currency}*\nОсталось распределить: *{remaining} {currency}*\n\nВведите сумму для этой части:",
+        "split_invalid_amount": "⚠️ Введите сумму от 0 до {remaining} {currency}.",
+        "split_finish_btn": "✅ Остаток сюда ({amount} {currency})",
+        "split_done": "✅ Разделено на {count} частей:",
         "recalculating_goals": "⏳ Удаление и пересчёт целей…",
 
         # Categories

@@ -87,7 +87,10 @@ logger = logging.getLogger(__name__)
     # Custom categories
     S_CATEGORY_TYPE, S_CATEGORY_NAME, S_CATEGORY_EMOJI,
     S_CATEGORY_SELECT_DELETE,
-) = range(38)
+
+    # Split transaction
+    S_TRANS_SELECT_SPLIT, S_SPLIT_AMOUNT, S_SPLIT_CATEGORY,
+) = range(41)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -133,6 +136,7 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_view_transactions"),   callback_data="trans_view")],
         [InlineKeyboardButton(t(l, "btn_transaction_history"), callback_data="trans_history")],
         [InlineKeyboardButton(t(l, "btn_edit_transaction_category"), callback_data="trans_edit_category")],
+        [InlineKeyboardButton(t(l, "btn_split_transaction"),   callback_data="trans_split")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
@@ -1236,6 +1240,173 @@ async def trans_edit_category_picked(update: Update, context: ContextTypes.DEFAU
 
     context.user_data.pop("edit_category_tx_id", None)
     context.user_data.pop("edit_category_tx_type", None)
+
+    await query.edit_message_text(
+        message_text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+# ─── Split transaction into multiple categories ───
+
+SPLIT_REMAINDER_EPSILON = 0.01
+
+
+def _split_amount_keyboard(uid: int, remaining: float, currency: str) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            t(l, "split_finish_btn", amount=f"{remaining:,.2f}", currency=currency),
+            callback_data="split_finish",
+        )],
+        [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")],
+    ])
+
+
+async def trans_split_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    txns  = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_split"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="tsplit"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_SPLIT
+
+
+async def trans_select_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    tx    = db.get_transaction(tx_id)
+    if not tx:
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    context.user_data["split_tx_id"]         = tx_id
+    context.user_data["split_type"]          = tx["type"]
+    context.user_data["split_currency"]      = tx["currency"]
+    context.user_data["split_original_amount"] = tx["amount"]
+    context.user_data["split_remaining"]     = tx["amount"]
+    context.user_data["split_parts"]         = []
+
+    await query.edit_message_text(
+        t(l, "split_enter_amount",
+          total=f"{tx['amount']:,.2f}", currency=tx["currency"],
+          remaining=f"{tx['amount']:,.2f}"),
+        reply_markup=_split_amount_keyboard(uid, tx["amount"], tx["currency"]),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_AMOUNT
+
+
+async def split_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    remaining = context.user_data.get("split_remaining", 0.0)
+    currency  = context.user_data.get("split_currency", "")
+    try:
+        amount = float(update.message.text.replace(",", "."))
+        if amount <= 0 or amount > remaining + SPLIT_REMAINDER_EPSILON:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            t(l, "split_invalid_amount", remaining=f"{remaining:,.2f}", currency=currency)
+        )
+        return S_SPLIT_AMOUNT
+
+    context.user_data["split_pending_amount"] = min(amount, remaining)
+    await update.message.reply_text(
+        t(l, "choose_new_category"),
+        reply_markup=category_keyboard(context.user_data.get("split_type", "expense"), uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_CATEGORY
+
+
+async def split_finish_clicked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    context.user_data["split_pending_amount"] = context.user_data.get("split_remaining", 0.0)
+    await query.edit_message_text(
+        t(l, "choose_new_category"),
+        reply_markup=category_keyboard(context.user_data.get("split_type", "expense"), uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_CATEGORY
+
+
+async def split_category_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    cat_key  = query.data[len("cat_"):]
+    amount   = context.user_data.get("split_pending_amount", 0.0)
+    currency = context.user_data.get("split_currency", "")
+
+    parts = context.user_data.setdefault("split_parts", [])
+    parts.append({"amount": amount, "category": cat_key})
+    remaining = max(0.0, context.user_data.get("split_remaining", 0.0) - amount)
+    context.user_data["split_remaining"] = remaining
+
+    if remaining <= SPLIT_REMAINDER_EPSILON:
+        return await _finalize_split(query, context, uid, l)
+
+    await query.edit_message_text(
+        t(l, "split_enter_amount",
+          total=f"{context.user_data.get('split_original_amount', 0.0):,.2f}", currency=currency,
+          remaining=f"{remaining:,.2f}"),
+        reply_markup=_split_amount_keyboard(uid, remaining, currency),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_AMOUNT
+
+
+async def _finalize_split(query, context: ContextTypes.DEFAULT_TYPE, uid: int, l: str):
+    tx_id    = context.user_data.get("split_tx_id")
+    parts    = context.user_data.get("split_parts", [])
+    t_type   = context.user_data.get("split_type", "expense")
+    currency = context.user_data.get("split_currency", "")
+
+    db.split_transaction(tx_id, parts)
+
+    lines = "\n".join(
+        f"• {category_label(p['category'], l)}: {p['amount']:,.2f} {currency}"
+        for p in parts
+    )
+    message_text = t(l, "split_done", count=len(parts)) + "\n\n" + lines
+
+    if t_type == "expense":
+        touched_categories = {p["category"] for p in parts}
+        needs_rates = any(db.get_budget_by_category(uid, c) is not None for c in touched_categories)
+        conversion_rates = await _fetch_rates_if_needed(needs_rates)
+        for c in touched_categories:
+            message_text += _budget_warning_text(uid, c, conversion_rates, l)
+
+    for key in ("split_tx_id", "split_type", "split_currency", "split_original_amount",
+                "split_remaining", "split_parts", "split_pending_amount"):
+        context.user_data.pop(key, None)
 
     await query.edit_message_text(
         message_text,
@@ -2503,6 +2674,28 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Split transaction into multiple categories ──
+    trans_split_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_split_start, pattern="^trans_split$")],
+        states={
+            S_TRANS_SELECT_SPLIT: [
+                CallbackQueryHandler(trans_select_split, pattern="^tsplit_"),
+            ],
+            S_SPLIT_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, split_amount_entered),
+                CallbackQueryHandler(split_finish_clicked, pattern="^split_finish$"),
+            ],
+            S_SPLIT_CATEGORY: [
+                CallbackQueryHandler(split_category_picked, pattern="^cat_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add transaction (requires account selection first) ──
     trans_conv = ConversationHandler(
         entry_points=[
@@ -2755,7 +2948,7 @@ def build_application() -> Application:
     # Register conversations (stats_custom_conv first — most specific entry pattern)
     for conv in [
         stats_custom_conv,
-        trans_delete_conv, trans_edit_category_conv, trans_conv,
+        trans_delete_conv, trans_edit_category_conv, trans_split_conv, trans_conv,
         account_add_conv, account_delete_conv, account_edit_balance_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
