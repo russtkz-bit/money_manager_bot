@@ -5,11 +5,12 @@ Tracks income/expenses via accounts, manages goals, currencies, and financial st
 
 import os
 import asyncio
+import csv
 import logging
 from collections import Counter
 from datetime import datetime, timedelta
 from typing import Optional
-from io import BytesIO
+from io import BytesIO, StringIO
 
 import aiohttp
 from dotenv import load_dotenv
@@ -20,7 +21,7 @@ from dotenv import load_dotenv
 # None regardless of what .env contains.
 load_dotenv()
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, InputFile
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ConversationHandler, filters, ContextTypes
@@ -130,6 +131,7 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_add_income"),          callback_data="trans_add_income"),
          InlineKeyboardButton(t(l, "btn_add_expense"),         callback_data="trans_add_expense")],
         [InlineKeyboardButton(t(l, "btn_view_transactions"),   callback_data="trans_view")],
+        [InlineKeyboardButton(t(l, "btn_transaction_history"), callback_data="trans_history")],
         [InlineKeyboardButton(t(l, "btn_edit_transaction_category"), callback_data="trans_edit_category")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
@@ -331,6 +333,17 @@ def stats_period_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "stats_recurring"),     callback_data="stats_recurring")],
         [InlineKeyboardButton(t(l, "btn_forecast"),        callback_data="stats_forecast")],
         [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
+    ])
+
+
+def history_period_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "stats_period_week"),  callback_data="hist_p_week"),
+         InlineKeyboardButton(t(l, "stats_period_month"), callback_data="hist_p_month")],
+        [InlineKeyboardButton(t(l, "stats_period_6m"),    callback_data="hist_p_6m"),
+         InlineKeyboardButton(t(l, "stats_period_year"),  callback_data="hist_p_year")],
+        [InlineKeyboardButton(t(l, "back"),               callback_data="menu_transactions")],
     ])
 
 
@@ -1006,6 +1019,105 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         text = text[:4000] + "\n..."
     await query.edit_message_text(
         text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+# ─────────────────── TRANSACTION HISTORY BY PERIOD ───────────────────
+
+def _build_history_csv(uid: int, txns: list, l: str) -> bytes:
+    """CSV of a period's full transaction history — column headers in the
+    user's own language since this file is for them, not for re-import.
+    utf-8-sig (BOM) so Excel opens Cyrillic text correctly instead of
+    guessing the wrong codepage."""
+    account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+    buf = StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        t(l, "history_col_date"), t(l, "history_col_type"), t(l, "history_col_category"),
+        t(l, "history_col_account"), t(l, "history_col_amount"), t(l, "history_col_currency"),
+        t(l, "history_col_description"),
+    ])
+    for tx in txns:
+        writer.writerow([
+            (tx["created_at"] or "")[:10],
+            t(l, "income") if tx["type"] == "income" else t(l, "expense"),
+            category_label(tx["category"], l),
+            account_names.get(tx["account_id"], "—"),
+            f"{tx['amount']:.2f}",
+            tx["currency"],
+            tx["description"] or "",
+        ])
+    return buf.getvalue().encode("utf-8-sig")
+
+
+async def trans_history_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    await query.edit_message_text(
+        t(l, "choose_history_period"),
+        reply_markup=history_period_keyboard(uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    period = query.data[len("hist_p_"):]
+
+    start, end, _ = finance.period_dates(period)
+    txns = db.get_transactions_filtered(uid, start, end)
+    txns.sort(key=lambda tx: tx["created_at"], reverse=True)
+
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    if period == "week":
+        # Short enough to just show inline, same as the "last 20" view.
+        account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+        text = t(l, "transactions_header")
+        for tx in txns:
+            emoji    = "📈" if tx["type"] == "income" else "📉"
+            date_str = tx["created_at"][:10] if tx["created_at"] else "?"
+            text    += t(l, "transaction_line",
+                         emoji=emoji, date=date_str,
+                         amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
+                         category=category_label(tx["category"], l),
+                         account=account_names.get(tx["account_id"], "—"),
+                         description=tx["description"] or "—")
+        if len(text) > 4000:
+            text = text[:4000] + "\n..."
+        await query.edit_message_text(
+            text,
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+
+    # month / 6m / year: a wall of chat text doesn't work at this size —
+    # send a personal CSV file instead.
+    await query.edit_message_text(t(l, "history_generating"), parse_mode=ParseMode.MARKDOWN)
+    csv_bytes = _build_history_csv(uid, txns, l)
+    filename  = f"transactions_{start}_{end}.csv"
+    await context.bot.send_document(
+        chat_id=uid,
+        document=InputFile(BytesIO(csv_bytes), filename=filename),
+        caption=t(l, "history_file_caption", start=start, end=end, count=len(txns)),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    await query.edit_message_text(
+        t(l, "history_file_sent"),
         reply_markup=back_keyboard(uid, "menu_transactions"),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -2669,6 +2781,9 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(cb_stats_forecast,  pattern="^stats_forecast$"))
     app.add_handler(CallbackQueryHandler(cb_schrt_toggle,    pattern="^schrt_toggle_"))
     app.add_handler(CallbackQueryHandler(cb_schrt_generate,  pattern="^schrt_generate$"))
+
+    app.add_handler(CallbackQueryHandler(trans_history_start,      pattern="^trans_history$"))
+    app.add_handler(CallbackQueryHandler(cb_trans_history_period,  pattern="^hist_p_(week|month|6m|year)$"))
 
     return app
 
