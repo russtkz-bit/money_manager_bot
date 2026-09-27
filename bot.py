@@ -3137,6 +3137,7 @@ def build_application() -> Application:
             ],
             S_ATTACH_WAITING_FILE: [
                 MessageHandler(filters.PHOTO | filters.Document.ALL, attach_file_received),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, attach_file_received),
             ],
             S_ATTACH_REMOVE_PICK: [
                 CallbackQueryHandler(attach_remove_pick, pattern="^attrm_|^attop_back$"),
