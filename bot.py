@@ -364,13 +364,22 @@ def goals_select_keyboard(goals: list, callback_prefix: str, uid: int) -> Inline
     return InlineKeyboardMarkup(rows)
 
 
+MAX_TRANS_SELECT_DETAIL_LEN = 22
+
+
 def _trans_select_keyboard(txns: list, uid: int, callback_prefix: str = "tdel") -> InlineKeyboardMarkup:
     l = lang(uid)
     rows = []
     for tx in txns:
         emoji    = "📈" if tx["type"] == "income" else "📉"
         date_str = tx["created_at"][:10] if tx["created_at"] else "?"
-        label    = f"{emoji} {date_str} {tx['amount']:,.0f} {tx['currency']}"
+        # Date + amount alone doesn't distinguish same-day transactions of the
+        # same amount (e.g. two identical CSV-imported charges) — description
+        # (falling back to the category) is what actually tells them apart.
+        detail = (tx.get("description") or "").strip() or category_label(tx["category"], l)
+        if len(detail) > MAX_TRANS_SELECT_DETAIL_LEN:
+            detail = detail[:MAX_TRANS_SELECT_DETAIL_LEN - 1] + "…"
+        label = f"{emoji} {date_str} {tx['amount']:,.0f} {tx['currency']} — {detail}"
         rows.append([InlineKeyboardButton(label, callback_data=f"{callback_prefix}_{tx['id']}")])
     rows.append([InlineKeyboardButton(t(l, "back"), callback_data="menu_transactions")])
     return InlineKeyboardMarkup(rows)
