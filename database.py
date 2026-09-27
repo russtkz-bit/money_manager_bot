@@ -239,6 +239,18 @@ def delete_account(account_id: int):
             cur.execute("DELETE FROM accounts WHERE id=%s", (account_id,))
 
 
+def update_account_initial_balance(account_id: int, new_balance: float):
+    """Corrects the account's opening balance — e.g. when it was set to the
+    *current* balance and a backdated CSV import then double-counted every
+    imported transaction's effect on top of that."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE accounts SET initial_balance=%s WHERE id=%s",
+                (round(new_balance, 4), account_id)
+            )
+
+
 def _compute_balance_in_cur(cur, account_id: int, initial_balance: float) -> float:
     """Compute account balance = initial_balance + income - expenses (uses open cursor)."""
     cur.execute(
@@ -371,6 +383,23 @@ def delete_transaction(transaction_id: int):
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM transactions WHERE id=%s", (transaction_id,))
+
+
+def get_transaction(transaction_id: int) -> Optional[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM transactions WHERE id=%s", (transaction_id,))
+            row = cur.fetchone()
+            return _norm_tx(dict(row)) if row else None
+
+
+def update_transaction_category(transaction_id: int, category: str):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE transactions SET category=%s WHERE id=%s",
+                (category, transaction_id)
+            )
 
 
 def delete_all_transactions(user_id: int) -> int:

@@ -76,7 +76,13 @@ logger = logging.getLogger(__name__)
 
     # CSV statement import
     S_IMPORT_ACCOUNT, S_IMPORT_FILE, S_IMPORT_CONFIRM,
-) = range(30)
+
+    # Edit account initial balance
+    S_ACCOUNT_EDIT_SELECT, S_ACCOUNT_EDIT_BALANCE,
+
+    # Edit transaction category
+    S_TRANS_SELECT_EDIT_CATEGORY, S_TRANS_EDIT_CATEGORY_PICK,
+) = range(34)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -119,6 +125,7 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_add_income"),          callback_data="trans_add_income"),
          InlineKeyboardButton(t(l, "btn_add_expense"),         callback_data="trans_add_expense")],
         [InlineKeyboardButton(t(l, "btn_view_transactions"),   callback_data="trans_view")],
+        [InlineKeyboardButton(t(l, "btn_edit_transaction_category"), callback_data="trans_edit_category")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
@@ -130,6 +137,7 @@ def accounts_keyboard(uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(l, "btn_add_account"),    callback_data="account_add")],
         [InlineKeyboardButton(t(l, "btn_view_accounts"),  callback_data="account_view")],
+        [InlineKeyboardButton(t(l, "btn_edit_account_balance"), callback_data="account_edit_balance")],
         [InlineKeyboardButton(t(l, "btn_delete_account"), callback_data="account_delete")],
         [InlineKeyboardButton(t(l, "btn_import_csv"),     callback_data="account_import_csv")],
         [InlineKeyboardButton(t(l, "back"),               callback_data="back_main")],
@@ -307,14 +315,14 @@ def goals_select_keyboard(goals: list, callback_prefix: str, uid: int) -> Inline
     return InlineKeyboardMarkup(rows)
 
 
-def _trans_select_keyboard(txns: list, uid: int) -> InlineKeyboardMarkup:
+def _trans_select_keyboard(txns: list, uid: int, callback_prefix: str = "tdel") -> InlineKeyboardMarkup:
     l = lang(uid)
     rows = []
     for tx in txns:
         emoji    = "📈" if tx["type"] == "income" else "📉"
         date_str = tx["created_at"][:10] if tx["created_at"] else "?"
         label    = f"{emoji} {date_str} {tx['amount']:,.0f} {tx['currency']}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"tdel_{tx['id']}")])
+        rows.append([InlineKeyboardButton(label, callback_data=f"{callback_prefix}_{tx['id']}")])
     rows.append([InlineKeyboardButton(t(l, "back"), callback_data="menu_transactions")])
     return InlineKeyboardMarkup(rows)
 
@@ -977,6 +985,81 @@ async def trans_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
+# ─── Edit transaction category ───
+
+async def trans_edit_category_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    txns  = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_edit_category"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="tcatedit"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_EDIT_CATEGORY
+
+
+async def trans_select_edit_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    tx    = db.get_transaction(tx_id)
+    if not tx:
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["edit_category_tx_id"]   = tx_id
+    context.user_data["edit_category_tx_type"] = tx["type"]
+    await query.edit_message_text(
+        t(l, "choose_new_category"),
+        reply_markup=category_keyboard(tx["type"], uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_EDIT_CATEGORY_PICK
+
+
+async def trans_edit_category_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    cat_key  = query.data[len("cat_"):]
+    tx_id    = context.user_data.get("edit_category_tx_id")
+    t_type   = context.user_data.get("edit_category_tx_type", "expense")
+    db.update_transaction_category(tx_id, cat_key)
+
+    message_text = t(l, "transaction_category_updated", category=category_label(cat_key, l))
+
+    if t_type == "expense":
+        needs_rates = db.get_budget_by_category(uid, cat_key) is not None
+        conversion_rates = await _fetch_rates_if_needed(needs_rates)
+        message_text += _budget_warning_text(uid, cat_key, conversion_rates, l)
+
+    context.user_data.pop("edit_category_tx_id", None)
+    context.user_data.pop("edit_category_tx_type", None)
+
+    await query.edit_message_text(
+        message_text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
 async def cb_clear_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1158,6 +1241,85 @@ async def account_select_delete(update: Update, context: ContextTypes.DEFAULT_TY
     db.recalculate_all_goals(uid, conversion_rates)
     await query.edit_message_text(
         t(l, "account_deleted"),
+        reply_markup=back_keyboard(uid, "menu_accounts"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
+# ─────────────────── EDIT ACCOUNT BALANCE ───────────────────
+
+async def account_edit_balance_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    accounts = db.get_accounts_with_balances(uid)
+    if not accounts:
+        await query.edit_message_text(
+            t(l, "no_accounts"),
+            reply_markup=back_keyboard(uid, "menu_accounts"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_account_to_edit_balance"),
+        reply_markup=accounts_select_keyboard(accounts, "aeditbal", uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_ACCOUNT_EDIT_SELECT
+
+
+async def account_edit_balance_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query      = update.callback_query
+    await query.answer()
+    uid        = query.from_user.id
+    l          = lang(uid)
+    account_id = int(query.data.split("_")[1])
+    acc = db.get_account(account_id)
+    context.user_data["edit_balance_account_id"]   = account_id
+    context.user_data["edit_balance_account_name"] = acc["name"] if acc else "?"
+    context.user_data["edit_balance_currency"]      = acc["currency"] if acc else "USD"
+    await query.edit_message_text(
+        t(l, "enter_new_initial_balance",
+          name=acc["name"] if acc else "?",
+          current=f"{acc['initial_balance']:,.2f}" if acc else "0.00",
+          currency=acc["currency"] if acc else ""),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_ACCOUNT_EDIT_BALANCE
+
+
+async def account_edit_balance_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    try:
+        balance = float(update.message.text.replace(",", "."))
+        if balance < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t(l, "invalid_amount"))
+        return S_ACCOUNT_EDIT_BALANCE
+
+    account_id = context.user_data["edit_balance_account_id"]
+    name       = context.user_data.get("edit_balance_account_name", "?")
+    currency   = context.user_data.get("edit_balance_currency", "")
+    db.update_account_initial_balance(account_id, balance)
+
+    # The account's computed balance depends on this, so goal progress
+    # (which tracks account balances) needs to catch up.
+    conversion_rates = await _fetch_rates_if_needed(bool(db.get_goals(uid)))
+    db.recalculate_all_goals(uid, conversion_rates)
+
+    context.user_data.pop("edit_balance_account_id", None)
+    context.user_data.pop("edit_balance_account_name", None)
+    context.user_data.pop("edit_balance_currency", None)
+
+    await update.message.reply_text(
+        t(l, "account_balance_updated", name=name, balance=f"{balance:,.2f}", currency=currency),
         reply_markup=back_keyboard(uid, "menu_accounts"),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -2003,6 +2165,24 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Edit transaction category ──
+    trans_edit_category_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_edit_category_start, pattern="^trans_edit_category$")],
+        states={
+            S_TRANS_SELECT_EDIT_CATEGORY: [
+                CallbackQueryHandler(trans_select_edit_category, pattern="^tcatedit_"),
+            ],
+            S_TRANS_EDIT_CATEGORY_PICK: [
+                CallbackQueryHandler(trans_edit_category_picked, pattern="^cat_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add transaction (requires account selection first) ──
     trans_conv = ConversationHandler(
         entry_points=[
@@ -2073,6 +2253,24 @@ def build_application() -> Application:
         states={
             S_ACCOUNT_SELECT_DELETE: [
                 CallbackQueryHandler(account_select_delete, pattern="^adel_")
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Edit account initial balance ──
+    account_edit_balance_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(account_edit_balance_start, pattern="^account_edit_balance$")],
+        states={
+            S_ACCOUNT_EDIT_SELECT: [
+                CallbackQueryHandler(account_edit_balance_selected, pattern="^aeditbal_"),
+            ],
+            S_ACCOUNT_EDIT_BALANCE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, account_edit_balance_entered),
             ],
         },
         fallbacks=[
@@ -2201,8 +2399,8 @@ def build_application() -> Application:
     # Register conversations (stats_custom_conv first — most specific entry pattern)
     for conv in [
         stats_custom_conv,
-        trans_delete_conv, trans_conv,
-        account_add_conv, account_delete_conv, import_conv,
+        trans_delete_conv, trans_edit_category_conv, trans_conv,
+        account_add_conv, account_delete_conv, account_edit_balance_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,

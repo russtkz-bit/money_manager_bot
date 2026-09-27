@@ -46,6 +46,7 @@ LANGUAGES = {
         "btn_view_transactions": "📋 View Transactions",
         "btn_clear_transactions": "🗑️ Clear All",
         "btn_delete_transaction": "🗑 Delete Transaction",
+        "btn_edit_transaction_category": "✏️ Edit Transaction Category",
         "btn_add_goal": "🎯 Add Goal",
         "btn_view_goals": "📋 View Goals",
         "btn_delete_goal": "🗑️ Delete Goal",
@@ -57,6 +58,7 @@ LANGUAGES = {
         "btn_view_accounts": "📋 View Accounts",
         "btn_delete_account": "🗑️ Delete Account",
         "btn_import_csv": "📥 Import Statement (CSV)",
+        "btn_edit_account_balance": "✏️ Edit Initial Balance",
         "choose_account_type": "🏦 Choose account type:",
         "account_type_bank": "🏦 Bank / Card",
         "account_type_crypto": "₿ Crypto Exchange",
@@ -71,6 +73,9 @@ LANGUAGES = {
         "account_line": "{emoji} *{name}* ({type})\n   Balance: `{balance:.2f} {currency}`\n\n",
         "choose_account_to_delete": "Choose an account to delete:\n\n⚠️ All transactions linked to it will be unlinked.",
         "account_deleted": "🗑️ Account deleted.",
+        "choose_account_to_edit_balance": "Choose an account to correct its initial balance:",
+        "enter_new_initial_balance": "*{name}*\nCurrent initial balance: {current} {currency}\n\nEnter the new initial balance. This should be the balance *before* your earliest recorded transaction — not today's actual balance, or backdated transactions (e.g. a CSV import) will get counted twice:",
+        "account_balance_updated": "✅ Initial balance for *{name}* updated to {balance} {currency}.",
         "choose_account_for_transaction": "🏦 Choose account for this transaction:",
 
         # Budgets
@@ -105,6 +110,9 @@ LANGUAGES = {
         "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] 🏦{account} _{description}_\n",
         "choose_transaction_to_delete": "🗑 *Choose a transaction to delete:*\n_(showing last 20)_",
         "transaction_deleted": "✅ Transaction deleted. Goal progress recalculated.",
+        "choose_transaction_to_edit_category": "✏️ *Choose a transaction to re-categorize:*\n_(showing last 20)_",
+        "choose_new_category": "Choose the new category:",
+        "transaction_category_updated": "✅ Category changed to *{category}*.",
         "recalculating_goals": "⏳ Deleting and recalculating goals…",
 
         # Categories
@@ -279,6 +287,7 @@ LANGUAGES = {
         "btn_view_transactions": "📋 История транзакций",
         "btn_clear_transactions": "🗑️ Удалить все",
         "btn_delete_transaction": "🗑 Удалить транзакцию",
+        "btn_edit_transaction_category": "✏️ Изменить категорию транзакции",
         "btn_add_goal": "🎯 Добавить цель",
         "btn_view_goals": "📋 Мои цели",
         "btn_delete_goal": "🗑️ Удалить цель",
@@ -290,6 +299,7 @@ LANGUAGES = {
         "btn_view_accounts": "📋 Мои счета",
         "btn_delete_account": "🗑️ Удалить счёт",
         "btn_import_csv": "📥 Импорт выписки (CSV)",
+        "btn_edit_account_balance": "✏️ Изменить начальный баланс",
         "choose_account_type": "🏦 Выберите тип счёта:",
         "account_type_bank": "🏦 Банк / Карта",
         "account_type_crypto": "₿ Криптобиржа",
@@ -304,6 +314,9 @@ LANGUAGES = {
         "account_line": "{emoji} *{name}* ({type})\n   Баланс: `{balance:.2f} {currency}`\n\n",
         "choose_account_to_delete": "Выберите счёт для удаления:\n\n⚠️ Все транзакции, привязанные к нему, будут отвязаны.",
         "account_deleted": "🗑️ Счёт удалён.",
+        "choose_account_to_edit_balance": "Выберите счёт, чтобы исправить начальный баланс:",
+        "enter_new_initial_balance": "*{name}*\nТекущий начальный баланс: {current} {currency}\n\nВведите новый начальный баланс. Это должен быть баланс *до* самой первой записанной операции — не текущий фактический баланс, иначе операции задним числом (например, из импорта CSV) посчитаются дважды:",
+        "account_balance_updated": "✅ Начальный баланс *{name}* изменён на {balance} {currency}.",
         "choose_account_for_transaction": "🏦 Выберите счёт для этой транзакции:",
 
         # Budgets
@@ -338,6 +351,9 @@ LANGUAGES = {
         "transaction_line": "{emoji} `{date}` — *{amount} {currency}* [{category}] 🏦{account} _{description}_\n",
         "choose_transaction_to_delete": "🗑 *Выберите транзакцию для удаления:*\n_(последние 20)_",
         "transaction_deleted": "✅ Транзакция удалена. Прогресс целей пересчитан.",
+        "choose_transaction_to_edit_category": "✏️ *Выберите транзакцию для смены категории:*\n_(последние 20)_",
+        "choose_new_category": "Выберите новую категорию:",
+        "transaction_category_updated": "✅ Категория изменена на *{category}*.",
         "recalculating_goals": "⏳ Удаление и пересчёт целей…",
 
         # Categories
