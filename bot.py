@@ -94,7 +94,10 @@ logger = logging.getLogger(__name__)
     # Transaction tags
     S_TRANS_SELECT_TAGS, S_TAGS_MANAGE, S_TAGS_ADD_INPUT, S_TAGS_REMOVE_PICK,
     S_TAGS_BROWSE_PICK,
-) = range(46)
+
+    # Transaction attachments
+    S_TRANS_SELECT_ATTACH, S_ATTACH_MANAGE, S_ATTACH_WAITING_FILE, S_ATTACH_REMOVE_PICK,
+) = range(50)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -143,6 +146,7 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_split_transaction"),   callback_data="trans_split")],
         [InlineKeyboardButton(t(l, "btn_transaction_tags"),    callback_data="trans_tags"),
          InlineKeyboardButton(t(l, "btn_browse_by_tag"),       callback_data="trans_browse_tag")],
+        [InlineKeyboardButton(t(l, "btn_transaction_attachments"), callback_data="trans_attach")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
@@ -1022,6 +1026,7 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         )
         return
     tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+    attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
     text = t(l, "transactions_header")
     for tx in txns:
         emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1032,7 +1037,8 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
                      emoji=emoji, date=date_str,
                      amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
                      category=category_label(tx["category"], l), account=account, description=desc,
-                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                     attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await query.edit_message_text(
@@ -1107,6 +1113,7 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
         # Short enough to just show inline, same as the "last 20" view.
         account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
         tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+        attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
         text = t(l, "transactions_header")
         for tx in txns:
             emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1117,7 +1124,8 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
                          category=category_label(tx["category"], l),
                          account=account_names.get(tx["account_id"], "—"),
                          description=tx["description"] or "—",
-                         tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
+                         tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                         attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
         if len(text) > 4000:
             text = text[:4000] + "\n..."
         await query.edit_message_text(
@@ -1438,6 +1446,10 @@ def _format_tags_suffix(tags: list) -> str:
     return f" 🏷{', '.join(tags)}" if tags else ""
 
 
+def _format_attachment_suffix(count: int) -> str:
+    return f" 📎{count}" if count else ""
+
+
 def _tags_manage_keyboard(uid: int, has_tags: bool) -> InlineKeyboardMarkup:
     l = lang(uid)
     rows = [[InlineKeyboardButton(t(l, "tagop_add_btn"), callback_data="tagop_add")]]
@@ -1616,6 +1628,7 @@ async def trans_browse_tag_picked(update: Update, context: ContextTypes.DEFAULT_
     txns = db.get_transactions_by_tag(uid, tag)[:20]
     account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
     tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+    attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
 
     text = t(l, "tag_transactions_header", tag=tag)
     for tx in txns:
@@ -1627,7 +1640,8 @@ async def trans_browse_tag_picked(update: Update, context: ContextTypes.DEFAULT_
                      category=category_label(tx["category"], l),
                      account=account_names.get(tx["account_id"], "—"),
                      description=tx["description"] or "—",
-                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                     attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
     if len(text) > 4000:
         text = text[:4000] + "\n..."
 
@@ -1638,6 +1652,173 @@ async def trans_browse_tag_picked(update: Update, context: ContextTypes.DEFAULT_
         parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
+
+
+def _attach_manage_keyboard(uid: int, has_attachments: bool) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(t(l, "attop_add_btn"), callback_data="attop_add")]]
+    if has_attachments:
+        rows.append([InlineKeyboardButton(t(l, "attop_view_btn"), callback_data="attop_view")])
+        rows.append([InlineKeyboardButton(t(l, "attop_remove_btn"), callback_data="attop_remove")])
+    rows.append([InlineKeyboardButton(t(l, "attop_done_btn"), callback_data="attop_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _attach_remove_keyboard(attachments: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for i, att in enumerate(attachments):
+        icon  = "📷" if att["file_type"] == "photo" else "📄"
+        label = f"🗑 {icon} #{i + 1}" + (f" {att['file_name']}" if att.get("file_name") else "")
+        rows.append([InlineKeyboardButton(label, callback_data=f"attrm_{i}")])
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="attop_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _attach_manage_view(uid: int, l: str, tx_id: int):
+    attachments = db.get_transaction_attachments(tx_id)
+    if attachments:
+        lines = []
+        for i, att in enumerate(attachments, 1):
+            icon = "📷" if att["file_type"] == "photo" else "📄"
+            name = att.get("file_name") or ""
+            lines.append(f"{i}. {icon} {name}".rstrip())
+        summary = "\n".join(lines)
+    else:
+        summary = t(l, "no_attachments_yet")
+    text = t(l, "attach_manage_header", attachments=summary)
+    return text, _attach_manage_keyboard(uid, bool(attachments))
+
+
+async def trans_attach_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    txns = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_attach"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="tattach"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_ATTACH
+
+
+async def trans_select_attach(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    if not db.get_transaction(tx_id):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["attach_tx_id"] = tx_id
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
+
+
+async def attach_manage_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    action = query.data
+    tx_id  = context.user_data.get("attach_tx_id")
+
+    if action == "attop_done":
+        context.user_data.pop("attach_tx_id", None)
+        await query.edit_message_text(
+            t(l, "attach_done"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    if action == "attop_add":
+        await query.edit_message_text(
+            t(l, "attach_send_file"),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return S_ATTACH_WAITING_FILE
+
+    if action == "attop_view":
+        attachments = db.get_transaction_attachments(tx_id)
+        for att in attachments:
+            if att["file_type"] == "photo":
+                await context.bot.send_photo(chat_id=uid, photo=att["file_id"])
+            else:
+                await context.bot.send_document(chat_id=uid, document=att["file_id"],
+                                                 filename=att.get("file_name"))
+        text, kb = _attach_manage_view(uid, l, tx_id)
+        await context.bot.send_message(chat_id=uid, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        return S_ATTACH_MANAGE
+
+    # action == "attop_remove"
+    attachments = db.get_transaction_attachments(tx_id)
+    context.user_data["attach_current"] = attachments
+    await query.edit_message_text(
+        t(l, "choose_attachment_to_remove"),
+        reply_markup=_attach_remove_keyboard(attachments, uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_ATTACH_REMOVE_PICK
+
+
+async def attach_file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("attach_tx_id")
+
+    if update.message.photo:
+        file_id   = update.message.photo[-1].file_id
+        file_type = "photo"
+        file_name = None
+    elif update.message.document:
+        file_id   = update.message.document.file_id
+        file_type = "document"
+        file_name = update.message.document.file_name
+    else:
+        await update.message.reply_text(t(l, "attach_wrong_type"))
+        return S_ATTACH_WAITING_FILE
+
+    db.add_transaction_attachment(tx_id, file_id, file_type, file_name)
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
+
+
+async def attach_remove_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("attach_tx_id")
+
+    if query.data != "attop_back":
+        idx         = int(query.data[len("attrm_"):])
+        attachments = context.user_data.get("attach_current", [])
+        if 0 <= idx < len(attachments):
+            db.delete_transaction_attachment(attachments[idx]["id"])
+
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
 
 
 async def cb_clear_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2944,6 +3125,30 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Manage a transaction's attachments (receipts/photos) ──
+    trans_attach_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_attach_start, pattern="^trans_attach$")],
+        states={
+            S_TRANS_SELECT_ATTACH: [
+                CallbackQueryHandler(trans_select_attach, pattern="^tattach_"),
+            ],
+            S_ATTACH_MANAGE: [
+                CallbackQueryHandler(attach_manage_router, pattern="^attop_(add|view|remove|done)$"),
+            ],
+            S_ATTACH_WAITING_FILE: [
+                MessageHandler(filters.PHOTO | filters.Document.ALL, attach_file_received),
+            ],
+            S_ATTACH_REMOVE_PICK: [
+                CallbackQueryHandler(attach_remove_pick, pattern="^attrm_|^attop_back$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Browse transactions by tag ──
     trans_browse_tag_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(trans_browse_tag_start, pattern="^trans_browse_tag$")],
@@ -3212,7 +3417,7 @@ def build_application() -> Application:
     for conv in [
         stats_custom_conv,
         trans_delete_conv, trans_edit_category_conv, trans_split_conv,
-        trans_tags_conv, trans_browse_tag_conv, trans_conv,
+        trans_tags_conv, trans_browse_tag_conv, trans_attach_conv, trans_conv,
         account_add_conv, account_delete_conv, account_edit_balance_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,

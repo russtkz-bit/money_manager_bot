@@ -134,6 +134,18 @@ def init_db():
                 );
                 CREATE INDEX IF NOT EXISTS idx_transaction_tags_transaction ON transaction_tags (transaction_id);
                 CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag ON transaction_tags (tag);
+
+                CREATE TABLE IF NOT EXISTS transaction_attachments (
+                    id             BIGSERIAL PRIMARY KEY,
+                    transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    file_id        TEXT NOT NULL,
+                    file_type      TEXT NOT NULL DEFAULT 'photo'
+                                       CHECK (file_type IN ('photo','document')),
+                    file_name      TEXT,
+                    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_transaction_attachments_transaction
+                    ON transaction_attachments (transaction_id);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -566,6 +578,58 @@ def get_tags_for_transactions(transaction_ids: List[int]) -> Dict[int, List[str]
             for r in cur.fetchall():
                 result.setdefault(r["transaction_id"], []).append(r["tag"])
             return result
+
+
+# ──────────────── TRANSACTION ATTACHMENTS ────────────────
+#
+# Stores Telegram's own file_id, not the file bytes — Telegram already hosts
+# the upload permanently; re-sending an attachment later is just handing
+# that file_id back to send_photo/send_document, no download/storage of our
+# own needed.
+
+def add_transaction_attachment(transaction_id: int, file_id: str,
+                               file_type: str, file_name: Optional[str] = None) -> int:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO transaction_attachments (transaction_id, file_id, file_type, file_name) "
+                "VALUES (%s,%s,%s,%s) RETURNING id",
+                (transaction_id, file_id, file_type, file_name)
+            )
+            return cur.fetchone()["id"]
+
+
+def get_transaction_attachments(transaction_id: int) -> List[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM transaction_attachments WHERE transaction_id=%s ORDER BY created_at ASC",
+                (transaction_id,)
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def delete_transaction_attachment(attachment_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM transaction_attachments WHERE id=%s", (attachment_id,))
+
+
+def count_attachments_for_transactions(transaction_ids: List[int]) -> Dict[int, int]:
+    """Batch attachment count per transaction id — a 📎 indicator in a
+    transaction list needs to know "how many", not the attachments
+    themselves, so this skips fetching file_id/file_name for rows that are
+    never going to be displayed inline in a text list anyway."""
+    if not transaction_ids:
+        return {}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT transaction_id, COUNT(*) AS cnt FROM transaction_attachments "
+                "WHERE transaction_id = ANY(%s) GROUP BY transaction_id",
+                (transaction_ids,)
+            )
+            return {r["transaction_id"]: r["cnt"] for r in cur.fetchall()}
 
 
 def delete_all_transactions(user_id: int) -> int:
