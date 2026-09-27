@@ -39,6 +39,7 @@ LANGUAGES = {
         "btn_currencies": "💱 Currencies",
         "btn_statistics": "📊 Statistics",
         "btn_settings": "⚙️ Settings",
+        "btn_categories": "🏷 Categories",
         "btn_accounts": "🏦 Accounts",
         "btn_budgets": "📐 Budgets",
         "btn_add_income": "➕ Add Income",
@@ -172,6 +173,24 @@ LANGUAGES = {
 
         # Settings
         "settings_header": "⚙️ *Settings*",
+        "categories_menu_header": "🏷 *Custom Categories*\n_(these show up alongside the built-in ones when picking a category)_",
+        "btn_add_category": "➕ Add Category",
+        "btn_view_categories": "📋 View My Categories",
+        "btn_delete_category": "🗑 Delete Category",
+        "no_custom_categories": "📭 No custom categories yet. Use ➕ Add Category to create one.",
+        "categories_header": "🏷 *Your Custom Categories:*\n\n",
+        "category_line": "{emoji} *{name}* ({type})\n",
+        "choose_category_type": "Which transactions should this category be available for?",
+        "category_type_income": "📈 Income",
+        "category_type_expense": "📉 Expense",
+        "category_type_both": "🔀 Both",
+        "enter_category_name": "Enter a name for the new category:",
+        "invalid_category_name": "⚠️ Enter a name from 1 to {max} characters.",
+        "enter_category_emoji": "Now send an emoji for it (e.g. 🐶, 🎮, 🎁):",
+        "invalid_category_emoji": "⚠️ Enter 1 to {max} characters for the emoji.",
+        "category_added": "✅ Category added: {emoji} *{name}*",
+        "choose_category_to_delete": "🗑 *Choose a category to delete:*",
+        "category_deleted": "🗑️ Category deleted. Transactions already using it keep it as-is.",
         "btn_change_language": "🌐 Change Language",
         "btn_change_currency": "💵 Base Currency",
         "base_currency_set": "✅ Base currency set to *{currency}*.",
@@ -280,6 +299,7 @@ LANGUAGES = {
         "btn_currencies": "💱 Валюты",
         "btn_statistics": "📊 Статистика",
         "btn_settings": "⚙️ Настройки",
+        "btn_categories": "🏷 Категории",
         "btn_accounts": "🏦 Счета",
         "btn_budgets": "📐 Бюджеты",
         "btn_add_income": "➕ Добавить доход",
@@ -412,6 +432,24 @@ LANGUAGES = {
 
         # Settings
         "settings_header": "⚙️ *Настройки*",
+        "categories_menu_header": "🏷 *Свои категории*\n_(показываются вместе со встроенными при выборе категории)_",
+        "btn_add_category": "➕ Добавить категорию",
+        "btn_view_categories": "📋 Мои категории",
+        "btn_delete_category": "🗑 Удалить категорию",
+        "no_custom_categories": "📭 Своих категорий пока нет. Нажмите ➕ Добавить категорию, чтобы создать.",
+        "categories_header": "🏷 *Ваши категории:*\n\n",
+        "category_line": "{emoji} *{name}* ({type})\n",
+        "choose_category_type": "Для каких операций будет доступна эта категория?",
+        "category_type_income": "📈 Доход",
+        "category_type_expense": "📉 Расход",
+        "category_type_both": "🔀 Оба варианта",
+        "enter_category_name": "Введите название новой категории:",
+        "invalid_category_name": "⚠️ Введите название от 1 до {max} символов.",
+        "enter_category_emoji": "Теперь отправьте эмодзи для неё (например 🐶, 🎮, 🎁):",
+        "invalid_category_emoji": "⚠️ Введите от 1 до {max} символов для эмодзи.",
+        "category_added": "✅ Категория добавлена: {emoji} *{name}*",
+        "choose_category_to_delete": "🗑 *Выберите категорию для удаления:*",
+        "category_deleted": "🗑️ Категория удалена. У операций, где она уже использована, категория останется прежней.",
         "btn_change_language": "🌐 Изменить язык",
         "btn_change_currency": "💵 Базовая валюта",
         "base_currency_set": "✅ Базовая валюта установлена: *{currency}*.",
@@ -501,6 +539,18 @@ def category_label(category_key: str, lang: str) -> str:
     canonical keys, when the category text itself was already the label.
     Shared by bot.py and webapp.py so both ever have exactly one notion of
     what a category key displays as.
+
+    A "custom_<id>" key (user-created via the bot's Categories menu) has no
+    translation and is looked up in the database instead — this keeps the
+    (key, lang) signature every existing caller already uses, so nothing
+    else needed to change to support custom categories.
     """
     label = t(lang, f"cat_{category_key}")
-    return category_key if label == f"cat_{category_key}" else label
+    if label != f"cat_{category_key}":
+        return label
+    if category_key.startswith("custom_"):
+        import database as db
+        cat = db.get_custom_category_by_key(category_key)
+        if cat:
+            return f"{cat['emoji']} {cat['name']}"
+    return category_key

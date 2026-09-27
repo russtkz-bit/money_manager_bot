@@ -113,6 +113,18 @@ def init_db():
                     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_web_login_codes_user ON web_login_codes (user_id);
+
+                CREATE TABLE IF NOT EXISTS custom_categories (
+                    id            BIGSERIAL PRIMARY KEY,
+                    user_id       BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    key           TEXT NOT NULL,
+                    name          TEXT NOT NULL,
+                    emoji         TEXT NOT NULL,
+                    category_type TEXT NOT NULL DEFAULT 'both'
+                                      CHECK (category_type IN ('income','expense','both')),
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_custom_categories_user ON custom_categories (user_id);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -740,6 +752,67 @@ def consume_web_login_code(code: str) -> Optional[int]:
     if row["expires_at"] < datetime.now(timezone.utc):
         return None
     return row["user_id"]
+
+
+# ──────────────── CUSTOM CATEGORIES ────────────────
+
+def add_custom_category(user_id: int, name: str, emoji: str, category_type: str = "both") -> str:
+    """Creates a user-defined category and returns its canonical key
+    ("custom_<id>") — the same kind of language-independent identifier
+    built-in categories use, so it can be stored on transactions/budgets
+    exactly like "food" or "salary" are."""
+    ensure_user(user_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO custom_categories (user_id, key, name, emoji, category_type) "
+                "VALUES (%s, '', %s, %s, %s) RETURNING id",
+                (user_id, name, emoji, category_type)
+            )
+            cat_id = cur.fetchone()["id"]
+            key = f"custom_{cat_id}"
+            cur.execute("UPDATE custom_categories SET key=%s WHERE id=%s", (key, cat_id))
+    return key
+
+
+def get_custom_categories(user_id: int, category_type: Optional[str] = None) -> List[Dict]:
+    """category_type "income"/"expense" also returns that user's "both"
+    categories; omit it (None) for every custom category regardless of type."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if category_type in ("income", "expense"):
+                cur.execute(
+                    "SELECT * FROM custom_categories WHERE user_id=%s "
+                    "AND category_type IN (%s, 'both') ORDER BY created_at ASC",
+                    (user_id, category_type)
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM custom_categories WHERE user_id=%s ORDER BY created_at ASC",
+                    (user_id,)
+                )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def get_custom_category_by_key(key: str) -> Optional[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM custom_categories WHERE key=%s", (key,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def delete_custom_category(user_id: int, key: str):
+    """Only removes the category definition — any transaction/budget
+    already using this key keeps it, same as deleting an account leaves
+    its past transactions in place. category_label() falls back to
+    showing the raw key for a category that's since been deleted."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM custom_categories WHERE user_id=%s AND key=%s",
+                (user_id, key)
+            )
 
 
 # ──────────────── FILTERED QUERIES (statistics) ────────────────
