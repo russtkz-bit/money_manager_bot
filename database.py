@@ -473,6 +473,11 @@ def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
     mid-way rolls back to the original single transaction rather than
     leaving it deleted with only some parts inserted.
 
+    The original's tags and attachments are copied onto every resulting
+    part (they described the whole purchase, so each part it's divided
+    into should keep them too) — otherwise deleting the original row would
+    silently cascade-delete them.
+
     Returns the new transaction ids, or [] if transaction_id didn't exist.
     """
     with get_connection() as conn:
@@ -481,6 +486,13 @@ def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
             orig = cur.fetchone()
             if not orig:
                 return []
+            cur.execute("SELECT tag FROM transaction_tags WHERE transaction_id=%s", (transaction_id,))
+            orig_tags = [r["tag"] for r in cur.fetchall()]
+            cur.execute(
+                "SELECT file_id, file_type, file_name FROM transaction_attachments WHERE transaction_id=%s",
+                (transaction_id,)
+            )
+            orig_attachments = cur.fetchall()
             cur.execute("DELETE FROM transactions WHERE id=%s", (transaction_id,))
             new_ids = []
             for part in parts:
@@ -491,7 +503,20 @@ def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
                     (orig["user_id"], orig["account_id"], orig["type"], part["amount"],
                      orig["currency"], part["category"], orig["description"], orig["created_at"])
                 )
-                new_ids.append(cur.fetchone()["id"])
+                new_id = cur.fetchone()["id"]
+                new_ids.append(new_id)
+                for tag in orig_tags:
+                    cur.execute(
+                        "INSERT INTO transaction_tags (transaction_id, tag) VALUES (%s,%s) "
+                        "ON CONFLICT DO NOTHING",
+                        (new_id, tag)
+                    )
+                for att in orig_attachments:
+                    cur.execute(
+                        "INSERT INTO transaction_attachments (transaction_id, file_id, file_type, file_name) "
+                        "VALUES (%s,%s,%s,%s)",
+                        (new_id, att["file_id"], att["file_type"], att["file_name"])
+                    )
             return new_ids
 
 
