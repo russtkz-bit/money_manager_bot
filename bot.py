@@ -90,7 +90,11 @@ logger = logging.getLogger(__name__)
 
     # Split transaction
     S_TRANS_SELECT_SPLIT, S_SPLIT_AMOUNT, S_SPLIT_CATEGORY,
-) = range(41)
+
+    # Transaction tags
+    S_TRANS_SELECT_TAGS, S_TAGS_MANAGE, S_TAGS_ADD_INPUT, S_TAGS_REMOVE_PICK,
+    S_TAGS_BROWSE_PICK,
+) = range(46)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -137,6 +141,8 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_transaction_history"), callback_data="trans_history")],
         [InlineKeyboardButton(t(l, "btn_edit_transaction_category"), callback_data="trans_edit_category")],
         [InlineKeyboardButton(t(l, "btn_split_transaction"),   callback_data="trans_split")],
+        [InlineKeyboardButton(t(l, "btn_transaction_tags"),    callback_data="trans_tags"),
+         InlineKeyboardButton(t(l, "btn_browse_by_tag"),       callback_data="trans_browse_tag")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
@@ -1015,6 +1021,7 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
             parse_mode=ParseMode.MARKDOWN
         )
         return
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
     text = t(l, "transactions_header")
     for tx in txns:
         emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1024,7 +1031,8 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         text    += t(l, "transaction_line",
                      emoji=emoji, date=date_str,
                      amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
-                     category=category_label(tx["category"], l), account=account, description=desc)
+                     category=category_label(tx["category"], l), account=account, description=desc,
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await query.edit_message_text(
@@ -1042,12 +1050,13 @@ def _build_history_csv(uid: int, txns: list, l: str) -> bytes:
     utf-8-sig (BOM) so Excel opens Cyrillic text correctly instead of
     guessing the wrong codepage."""
     account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
     buf = StringIO()
     writer = csv.writer(buf)
     writer.writerow([
         t(l, "history_col_date"), t(l, "history_col_type"), t(l, "history_col_category"),
         t(l, "history_col_account"), t(l, "history_col_amount"), t(l, "history_col_currency"),
-        t(l, "history_col_description"),
+        t(l, "history_col_description"), t(l, "history_col_tags"),
     ])
     for tx in txns:
         writer.writerow([
@@ -1058,6 +1067,7 @@ def _build_history_csv(uid: int, txns: list, l: str) -> bytes:
             f"{tx['amount']:.2f}",
             tx["currency"],
             tx["description"] or "",
+            ", ".join(tags_by_tx.get(tx["id"], [])),
         ])
     return buf.getvalue().encode("utf-8-sig")
 
@@ -1096,6 +1106,7 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
     if period == "week":
         # Short enough to just show inline, same as the "last 20" view.
         account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+        tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
         text = t(l, "transactions_header")
         for tx in txns:
             emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1105,7 +1116,8 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
                          amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
                          category=category_label(tx["category"], l),
                          account=account_names.get(tx["account_id"], "—"),
-                         description=tx["description"] or "—")
+                         description=tx["description"] or "—",
+                         tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
         if len(text) > 4000:
             text = text[:4000] + "\n..."
         await query.edit_message_text(
@@ -1410,6 +1422,218 @@ async def _finalize_split(query, context: ContextTypes.DEFAULT_TYPE, uid: int, l
 
     await query.edit_message_text(
         message_text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+# ─── Transaction tags ───
+
+MAX_TAGS_PER_SUBMIT = 10
+MAX_TAG_LEN = 30
+
+
+def _format_tags_suffix(tags: list) -> str:
+    return f" 🏷{', '.join(tags)}" if tags else ""
+
+
+def _tags_manage_keyboard(uid: int, has_tags: bool) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(t(l, "tagop_add_btn"), callback_data="tagop_add")]]
+    if has_tags:
+        rows.append([InlineKeyboardButton(t(l, "tagop_remove_btn"), callback_data="tagop_remove")])
+    rows.append([InlineKeyboardButton(t(l, "tagop_done_btn"), callback_data="tagop_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _tags_remove_keyboard(tags: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(f"🗑 {tg}", callback_data=f"tagrm_{i}")] for i, tg in enumerate(tags)]
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="tagop_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _tags_manage_view(uid: int, l: str, tx_id: int):
+    tags = db.get_transaction_tags(tx_id)
+    tags_text = ", ".join(tags) if tags else t(l, "no_tags_yet")
+    return t(l, "tags_manage_header", tags=tags_text), _tags_manage_keyboard(uid, bool(tags))
+
+
+async def trans_tags_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    txns = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_tag"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="ttags"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_TAGS
+
+
+async def trans_select_tags(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    if not db.get_transaction(tx_id):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["tags_tx_id"] = tx_id
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def tags_manage_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    action = query.data
+    tx_id  = context.user_data.get("tags_tx_id")
+
+    if action == "tagop_done":
+        context.user_data.pop("tags_tx_id", None)
+        await query.edit_message_text(
+            t(l, "tags_done"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    if action == "tagop_add":
+        await query.edit_message_text(
+            t(l, "enter_tags"),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return S_TAGS_ADD_INPUT
+
+    # action == "tagop_remove"
+    tags = db.get_transaction_tags(tx_id)
+    context.user_data["tags_current"] = tags
+    await query.edit_message_text(
+        t(l, "choose_tag_to_remove"),
+        reply_markup=_tags_remove_keyboard(tags, uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TAGS_REMOVE_PICK
+
+
+async def tags_add_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("tags_tx_id")
+
+    candidates = [tg.strip()[:MAX_TAG_LEN] for tg in update.message.text.split(",")]
+    candidates = [tg for tg in candidates if tg][:MAX_TAGS_PER_SUBMIT]
+    if not candidates:
+        await update.message.reply_text(t(l, "invalid_tags"))
+        return S_TAGS_ADD_INPUT
+
+    db.add_transaction_tags(tx_id, candidates)
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def tags_remove_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("tags_tx_id")
+
+    if query.data != "tagop_back":
+        idx  = int(query.data[len("tagrm_"):])
+        tags = context.user_data.get("tags_current", [])
+        if 0 <= idx < len(tags):
+            db.remove_transaction_tag(tx_id, tags[idx])
+
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def trans_browse_tag_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    tags = db.get_user_tags(uid)
+    if not tags:
+        await query.edit_message_text(
+            t(l, "no_tags_yet_global"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["browse_tags_list"] = tags
+    rows = [[InlineKeyboardButton(f"🏷 {tg}", callback_data=f"tagbrowse_{i}")] for i, tg in enumerate(tags)]
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    await query.edit_message_text(
+        t(l, "choose_tag_to_browse"),
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TAGS_BROWSE_PICK
+
+
+async def trans_browse_tag_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    idx  = int(query.data[len("tagbrowse_"):])
+    tags = context.user_data.get("browse_tags_list", [])
+    if not (0 <= idx < len(tags)):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    tag = tags[idx]
+    txns = db.get_transactions_by_tag(uid, tag)[:20]
+    account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+
+    text = t(l, "tag_transactions_header", tag=tag)
+    for tx in txns:
+        emoji    = "📈" if tx["type"] == "income" else "📉"
+        date_str = tx["created_at"][:10] if tx["created_at"] else "?"
+        text    += t(l, "transaction_line",
+                     emoji=emoji, date=date_str,
+                     amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
+                     category=category_label(tx["category"], l),
+                     account=account_names.get(tx["account_id"], "—"),
+                     description=tx["description"] or "—",
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])))
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+
+    context.user_data.pop("browse_tags_list", None)
+    await query.edit_message_text(
+        text,
         reply_markup=back_keyboard(uid, "menu_transactions"),
         parse_mode=ParseMode.MARKDOWN,
     )
@@ -2696,6 +2920,45 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Manage a transaction's tags ──
+    trans_tags_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_tags_start, pattern="^trans_tags$")],
+        states={
+            S_TRANS_SELECT_TAGS: [
+                CallbackQueryHandler(trans_select_tags, pattern="^ttags_"),
+            ],
+            S_TAGS_MANAGE: [
+                CallbackQueryHandler(tags_manage_router, pattern="^tagop_(add|remove|done)$"),
+            ],
+            S_TAGS_ADD_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tags_add_input),
+            ],
+            S_TAGS_REMOVE_PICK: [
+                CallbackQueryHandler(tags_remove_pick, pattern="^tagrm_|^tagop_back$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Browse transactions by tag ──
+    trans_browse_tag_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_browse_tag_start, pattern="^trans_browse_tag$")],
+        states={
+            S_TAGS_BROWSE_PICK: [
+                CallbackQueryHandler(trans_browse_tag_picked, pattern="^tagbrowse_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add transaction (requires account selection first) ──
     trans_conv = ConversationHandler(
         entry_points=[
@@ -2948,7 +3211,8 @@ def build_application() -> Application:
     # Register conversations (stats_custom_conv first — most specific entry pattern)
     for conv in [
         stats_custom_conv,
-        trans_delete_conv, trans_edit_category_conv, trans_split_conv, trans_conv,
+        trans_delete_conv, trans_edit_category_conv, trans_split_conv,
+        trans_tags_conv, trans_browse_tag_conv, trans_conv,
         account_add_conv, account_delete_conv, account_edit_balance_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,

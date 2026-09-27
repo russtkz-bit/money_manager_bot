@@ -24,7 +24,8 @@
           <td>
             {{ '📈' if tx.type == 'income' else '📉' }}
             <strong>{{ "%.2f"|format(tx.amount) }} {{ tx.currency }}</strong>
-            <span class="pill">{{ tx.category_display }}</span><br>
+            <span class="pill">{{ tx.category_display }}</span>
+            {% for tag in tx.tags %}<span class="pill pill-tag">🏷 {{ tag }}</span>{% endfor %}<br>
             <span class="muted">{{ tx.date_display }} · {{ tx.account_name }}{% if tx.description %} · {{ tx.description }}{% endif %}</span>
           </td>
         </tr>

@@ -125,6 +125,15 @@ def init_db():
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_custom_categories_user ON custom_categories (user_id);
+
+                CREATE TABLE IF NOT EXISTS transaction_tags (
+                    id             BIGSERIAL PRIMARY KEY,
+                    transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    tag            TEXT NOT NULL,
+                    UNIQUE (transaction_id, tag)
+                );
+                CREATE INDEX IF NOT EXISTS idx_transaction_tags_transaction ON transaction_tags (transaction_id);
+                CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag ON transaction_tags (tag);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -472,6 +481,91 @@ def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
                 )
                 new_ids.append(cur.fetchone()["id"])
             return new_ids
+
+
+# ──────────────── TRANSACTION TAGS ────────────────
+
+def add_transaction_tags(transaction_id: int, tags: List[str]) -> List[str]:
+    """Adds each tag to the transaction, skipping ones already there
+    (exact-string duplicates only — "Work" and "work" are kept distinct,
+    same as the user typed them). Returns the tags that were actually new."""
+    added = []
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for tag in tags:
+                cur.execute(
+                    "INSERT INTO transaction_tags (transaction_id, tag) VALUES (%s, %s) "
+                    "ON CONFLICT (transaction_id, tag) DO NOTHING RETURNING tag",
+                    (transaction_id, tag)
+                )
+                row = cur.fetchone()
+                if row:
+                    added.append(row["tag"])
+    return added
+
+
+def get_transaction_tags(transaction_id: int) -> List[str]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT tag FROM transaction_tags WHERE transaction_id=%s ORDER BY tag",
+                (transaction_id,)
+            )
+            return [r["tag"] for r in cur.fetchall()]
+
+
+def remove_transaction_tag(transaction_id: int, tag: str):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM transaction_tags WHERE transaction_id=%s AND tag=%s",
+                (transaction_id, tag)
+            )
+
+
+def get_user_tags(user_id: int) -> List[str]:
+    """Every distinct tag this user has used, across all their transactions
+    — for a "browse by tag" picker."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT tt.tag FROM transaction_tags tt "
+                "JOIN transactions t ON t.id = tt.transaction_id "
+                "WHERE t.user_id=%s ORDER BY tt.tag",
+                (user_id,)
+            )
+            return [r["tag"] for r in cur.fetchall()]
+
+
+def get_transactions_by_tag(user_id: int, tag: str) -> List[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT t.* FROM transactions t "
+                "JOIN transaction_tags tt ON tt.transaction_id = t.id "
+                "WHERE t.user_id=%s AND tt.tag=%s ORDER BY t.created_at DESC",
+                (user_id, tag)
+            )
+            return [_norm_tx(dict(r)) for r in cur.fetchall()]
+
+
+def get_tags_for_transactions(transaction_ids: List[int]) -> Dict[int, List[str]]:
+    """Batch tag lookup for a list of transaction ids, keyed by id — avoids
+    an N+1 query when a whole list of transactions each need their tags
+    (viewing history, exporting it), one query instead of one per row."""
+    if not transaction_ids:
+        return {}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT transaction_id, tag FROM transaction_tags "
+                "WHERE transaction_id = ANY(%s) ORDER BY tag",
+                (transaction_ids,)
+            )
+            result: Dict[int, List[str]] = {}
+            for r in cur.fetchall():
+                result.setdefault(r["transaction_id"], []).append(r["tag"])
+            return result
 
 
 def delete_all_transactions(user_id: int) -> int:

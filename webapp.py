@@ -192,10 +192,12 @@ async def transactions_page(
     txns = txns[:MAX_TRANSACTIONS_SHOWN]
 
     account_names = {a["id"]: a["name"] for a in db.get_accounts(user_id)}
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
     for tx in txns:
         tx["category_display"] = category_label(tx["category"], lang)
         tx["account_name"] = account_names.get(tx["account_id"], "—")
         tx["date_display"] = (tx["created_at"] or "")[:10]
+        tx["tags"] = tags_by_tx.get(tx["id"], [])
 
     return render(
         request, "transactions.html", active="transactions",
