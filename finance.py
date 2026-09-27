@@ -8,6 +8,7 @@ a different (unsafe) contract on a missing rate. Every frontend (bot.py,
 webapp/) must call through here rather than growing its own copy.
 """
 
+import calendar
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -159,28 +160,80 @@ def aggregate_transactions(txns: list, base_currency: str, lang: str,
     }
 
 
+def _months_ago(d, months: int):
+    """Same day-of-month `months` months before `d`, clamped to the target
+    month's last day (e.g. Mar 31 minus 1 month -> Feb 28/29). Pure calendar
+    arithmetic — stdlib has no relativedelta, and "subtract 30*N days" drifts
+    away from the actual calendar month as N grows."""
+    month = d.month - months
+    year = d.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day)
+
+
+def net_worth_history(uid: int, base_currency: str,
+                      fiat: dict, crypto: dict, metals: dict,
+                      months_back: int, accounts: list) -> Tuple[list, bool]:
+    """Net worth as it actually stood at each of the last `months_back`
+    month marks — oldest first, offsets -months_back..-1. Today itself
+    (offset 0) is deliberately not included here since forecast_net_worth
+    already computes that as its own "current" figure via net_worth();
+    recomputing it as-of today through compute_balance_as_of would just be
+    redundant work reaching the same number.
+
+    Reconstructed from each account's initial_balance plus every
+    transaction up to that date — the historical counterpart to
+    forecast_net_worth's forward projection, but built from what actually
+    happened rather than an assumption about what keeps happening.
+    """
+    today = datetime.now().date()
+    points = []
+    all_converted = True
+    for m in range(months_back, 0, -1):
+        as_of = _months_ago(today, m).strftime("%Y-%m-%d")
+        total = 0.0
+        for acc in accounts:
+            bal = db.compute_balance_as_of(acc["id"], acc["initial_balance"], as_of)
+            amt, ok = convert_or_flag(bal, acc["currency"], base_currency, fiat, crypto, metals)
+            total += amt
+            all_converted = all_converted and ok
+        points.append((-m, total))
+    return points, all_converted
+
+
 def forecast_net_worth(uid: int, base_currency: str,
                        fiat: dict, crypto: dict, metals: dict,
-                       months_ahead: int = 6, lookback_days: int = 90,
+                       months_ahead: int = 6, months_back: int = 6,
+                       lookback_days: int = 90,
                        accounts: Optional[list] = None) -> dict:
-    """Project net worth forward by assuming the recent average monthly net
-    cash flow (income minus expenses over the last `lookback_days`) keeps
-    happening — the "if nothing changes" forecast PocketSmith is known for.
-    It's deliberately simple: one trailing average, not a per-category
-    recurring-transaction model, so it stays meaningful even for accounts
-    with irregular spending.
+    """Net worth history and forecast on one continuous timeline: real past
+    balances for the last `months_back` months, today's actual net worth,
+    and a forward projection for `months_ahead` months assuming the recent
+    average monthly net cash flow (income minus expenses over the last
+    `lookback_days`) keeps happening — the "if nothing changes" forecast
+    PocketSmith is known for. The forward part is deliberately simple: one
+    trailing average, not a per-category recurring-transaction model, so it
+    stays meaningful even for accounts with irregular spending.
 
     Returns {"current", "monthly_net", "all_converted", "points"} where
-    points is [(month_offset, projected_net_worth), ...] for month_offset
-    0..months_ahead (0 is today's actual net worth).
+    points is [(month_offset, net_worth), ...] for month_offset
+    -months_back..months_ahead (0 is today's actual net worth; negative
+    offsets are real history, positive ones are projected).
     """
+    if accounts is None:
+        accounts = db.get_accounts_with_balances(uid)
+
     current, nw_ok = net_worth(uid, base_currency, fiat, crypto, metals, accounts=accounts)
+    history_points, hist_ok = net_worth_history(uid, base_currency, fiat, crypto, metals, months_back, accounts)
 
     start = (datetime.now().date() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
     txns = db.get_transactions_filtered(uid, start)
     total_income = 0.0
     total_expense = 0.0
-    all_converted = nw_ok
+    all_converted = nw_ok and hist_ok
     for tx in txns:
         amt, ok = convert_or_flag(tx["amount"], tx["currency"], base_currency, fiat, crypto, metals)
         all_converted = all_converted and ok
@@ -192,15 +245,16 @@ def forecast_net_worth(uid: int, base_currency: str,
     months_observed = max(lookback_days / 30.0, 1.0)
     monthly_net = (total_income - total_expense) / months_observed
 
-    points = [(0, current)]
+    future_points = [(0, current)]
     for m in range(1, months_ahead + 1):
-        points.append((m, current + monthly_net * m))
+        future_points.append((m, current + monthly_net * m))
 
     return {
         "current": current,
         "monthly_net": monthly_net,
         "all_converted": all_converted,
-        "points": points,
+        "points": history_points + future_points,
+        "history_months": months_back,
     }
 
 

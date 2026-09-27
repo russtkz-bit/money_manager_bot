@@ -306,35 +306,60 @@ def generate_forecast_chart(
     title: str = "Net Worth Forecast",
     month_label: str = "mo",
 ) -> Optional[bytes]:
-    """Line chart of projected net worth. `points` is
+    """Line chart combining real net worth history with a forward
+    projection on one continuous timeline. `points` is
     [(month_offset:int, value:float), ...] as returned by
-    finance.forecast_net_worth — offset 0 is today's actual value."""
+    finance.forecast_net_worth — offset 0 is today's actual value,
+    negative offsets are real history (solid line), positive ones are
+    projected (dashed line); the point at 0 belongs to both segments so
+    they visually connect with no gap at "today"."""
     if not points or len(points) < 2:
         return None
 
     offsets = [p[0] for p in points]
     values  = [p[1] for p in points]
-    color   = ACCENT_GREEN if values[-1] >= values[0] else ACCENT_RED
+    floor   = min(values, default=0)
+
+    history  = [(o, v) for o, v in points if o <= 0]
+    forecast = [(o, v) for o, v in points if o >= 0]
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     fig.patch.set_facecolor(BG)
     _style_ax(ax)
 
-    ax.plot(offsets, values, color=color, linewidth=2.4, marker="o",
-            markersize=5, zorder=3)
-    ax.fill_between(offsets, values, min(values, default=0), color=color,
-                    alpha=0.12, zorder=2)
-    ax.axhline(0, color=GRID_LINE, linewidth=0.8, zorder=1)
+    if len(history) >= 2:
+        h_x, h_y = zip(*history)
+        ax.plot(h_x, h_y, color=ACCENT_BLUE, linewidth=2.4, marker="o",
+                markersize=5, zorder=3)
+        ax.fill_between(h_x, h_y, floor, color=ACCENT_BLUE, alpha=0.10, zorder=1)
 
+    if len(forecast) >= 2:
+        f_x, f_y = zip(*forecast)
+        f_color = ACCENT_GREEN if f_y[-1] >= f_y[0] else ACCENT_RED
+        ax.plot(f_x, f_y, color=f_color, linewidth=2.2, linestyle="--",
+                marker="o", markersize=5, zorder=3)
+        ax.fill_between(f_x, f_y, floor, color=f_color, alpha=0.10, zorder=1)
+
+    ax.axhline(0, color=GRID_LINE, linewidth=0.8, zorder=1)
+    if offsets[0] < 0 < offsets[-1]:
+        ax.axvline(0, color=GRID_LINE, linewidth=1, linestyle=":", zorder=1)
+
+    # Up to 13 points on one axis — labeling every value would be unreadable,
+    # so only the two endpoints and "today" get a printed number.
     val_range = max(values) - min(values) or 1
     label_offset = val_range * 0.03
-    for x, y in zip(offsets, values):
+    label_indices = {0, len(points) - 1}
+    if 0 in offsets:
+        label_indices.add(offsets.index(0))
+    for i in label_indices:
+        x, y = points[i]
         ax.text(x, y + label_offset, _short(y), ha="center", va="bottom",
                 color=TEXT_MAIN, fontsize=8, zorder=4)
 
     ax.set_xticks(offsets)
     ax.set_xticklabels(
-        ["now"] + [f"+{o}{month_label}" for o in offsets[1:]],
+        ["now" if o == 0 else (f"+{o}{month_label}" if o > 0 else f"{o}{month_label}")
+         for o in offsets],
         color=TEXT_MAIN, fontsize=8,
     )
     ax.set_ylabel(currency, color=TEXT_MAIN, fontsize=9)

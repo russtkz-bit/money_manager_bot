@@ -87,7 +87,17 @@ logger = logging.getLogger(__name__)
     # Custom categories
     S_CATEGORY_TYPE, S_CATEGORY_NAME, S_CATEGORY_EMOJI,
     S_CATEGORY_SELECT_DELETE,
-) = range(38)
+
+    # Split transaction
+    S_TRANS_SELECT_SPLIT, S_SPLIT_AMOUNT, S_SPLIT_CATEGORY,
+
+    # Transaction tags
+    S_TRANS_SELECT_TAGS, S_TAGS_MANAGE, S_TAGS_ADD_INPUT, S_TAGS_REMOVE_PICK,
+    S_TAGS_BROWSE_PICK,
+
+    # Transaction attachments
+    S_TRANS_SELECT_ATTACH, S_ATTACH_MANAGE, S_ATTACH_WAITING_FILE, S_ATTACH_REMOVE_PICK,
+) = range(50)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -133,6 +143,10 @@ def transactions_keyboard(uid: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(l, "btn_view_transactions"),   callback_data="trans_view")],
         [InlineKeyboardButton(t(l, "btn_transaction_history"), callback_data="trans_history")],
         [InlineKeyboardButton(t(l, "btn_edit_transaction_category"), callback_data="trans_edit_category")],
+        [InlineKeyboardButton(t(l, "btn_split_transaction"),   callback_data="trans_split")],
+        [InlineKeyboardButton(t(l, "btn_transaction_tags"),    callback_data="trans_tags"),
+         InlineKeyboardButton(t(l, "btn_browse_by_tag"),       callback_data="trans_browse_tag")],
+        [InlineKeyboardButton(t(l, "btn_transaction_attachments"), callback_data="trans_attach")],
         [InlineKeyboardButton(t(l, "btn_delete_transaction"),  callback_data="trans_delete"),
          InlineKeyboardButton(t(l, "btn_clear_transactions"),  callback_data="trans_clear")],
         [InlineKeyboardButton(t(l, "back"),                    callback_data="back_main")],
@@ -861,6 +875,12 @@ async def cb_stats_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = t(l, "forecast_header")
     text += t(l, "forecast_current", amount=f"{forecast['current']:,.2f}", currency=base_currency)
+    history_months = forecast["history_months"]
+    if history_months > 0:
+        history_change = forecast["current"] - forecast["points"][0][1]
+        history_key = "forecast_history_positive" if history_change >= 0 else "forecast_history_negative"
+        text += t(l, history_key, months=history_months,
+                 amount=f"{abs(history_change):,.2f}", currency=base_currency)
     if forecast["monthly_net"] >= 0:
         text += t(l, "forecast_monthly_net_positive", amount=f"{forecast['monthly_net']:,.2f}", currency=base_currency)
     else:
@@ -871,7 +891,7 @@ async def cb_stats_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not forecast["all_converted"]:
         text += "\n" + t(l, "rates_incomplete_note")
 
-    img = ch.generate_forecast_chart(forecast["points"], base_currency, title=t(l, "btn_forecast"))
+    img = ch.generate_forecast_chart(forecast["points"], base_currency, title=t(l, "forecast_chart_title"))
     if img:
         await context.bot.send_photo(chat_id=uid, photo=BytesIO(img))
     await context.bot.send_message(
@@ -1005,6 +1025,8 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
             parse_mode=ParseMode.MARKDOWN
         )
         return
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+    attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
     text = t(l, "transactions_header")
     for tx in txns:
         emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1014,7 +1036,9 @@ async def handle_view_transactions(update: Update, context: ContextTypes.DEFAULT
         text    += t(l, "transaction_line",
                      emoji=emoji, date=date_str,
                      amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
-                     category=category_label(tx["category"], l), account=account, description=desc)
+                     category=category_label(tx["category"], l), account=account, description=desc,
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                     attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await query.edit_message_text(
@@ -1032,12 +1056,13 @@ def _build_history_csv(uid: int, txns: list, l: str) -> bytes:
     utf-8-sig (BOM) so Excel opens Cyrillic text correctly instead of
     guessing the wrong codepage."""
     account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
     buf = StringIO()
     writer = csv.writer(buf)
     writer.writerow([
         t(l, "history_col_date"), t(l, "history_col_type"), t(l, "history_col_category"),
         t(l, "history_col_account"), t(l, "history_col_amount"), t(l, "history_col_currency"),
-        t(l, "history_col_description"),
+        t(l, "history_col_description"), t(l, "history_col_tags"),
     ])
     for tx in txns:
         writer.writerow([
@@ -1048,6 +1073,7 @@ def _build_history_csv(uid: int, txns: list, l: str) -> bytes:
             f"{tx['amount']:.2f}",
             tx["currency"],
             tx["description"] or "",
+            ", ".join(tags_by_tx.get(tx["id"], [])),
         ])
     return buf.getvalue().encode("utf-8-sig")
 
@@ -1086,6 +1112,8 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
     if period == "week":
         # Short enough to just show inline, same as the "last 20" view.
         account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+        tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+        attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
         text = t(l, "transactions_header")
         for tx in txns:
             emoji    = "📈" if tx["type"] == "income" else "📉"
@@ -1095,7 +1123,9 @@ async def cb_trans_history_period(update: Update, context: ContextTypes.DEFAULT_
                          amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
                          category=category_label(tx["category"], l),
                          account=account_names.get(tx["account_id"], "—"),
-                         description=tx["description"] or "—")
+                         description=tx["description"] or "—",
+                         tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                         attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
         if len(text) > 4000:
             text = text[:4000] + "\n..."
         await query.edit_message_text(
@@ -1237,6 +1267,558 @@ async def trans_edit_category_picked(update: Update, context: ContextTypes.DEFAU
         parse_mode=ParseMode.MARKDOWN,
     )
     return ConversationHandler.END
+
+
+# ─── Split transaction into multiple categories ───
+
+SPLIT_REMAINDER_EPSILON = 0.01
+
+
+def _split_amount_keyboard(uid: int, remaining: float, currency: str) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            t(l, "split_finish_btn", amount=f"{remaining:,.2f}", currency=currency),
+            callback_data="split_finish",
+        )],
+        [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")],
+    ])
+
+
+async def trans_split_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    txns  = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_split"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="tsplit"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_SPLIT
+
+
+async def trans_select_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    tx    = db.get_transaction(tx_id)
+    if not tx:
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    context.user_data["split_tx_id"]         = tx_id
+    context.user_data["split_type"]          = tx["type"]
+    context.user_data["split_currency"]      = tx["currency"]
+    context.user_data["split_original_amount"] = tx["amount"]
+    context.user_data["split_remaining"]     = tx["amount"]
+    context.user_data["split_parts"]         = []
+
+    await query.edit_message_text(
+        t(l, "split_enter_amount",
+          total=f"{tx['amount']:,.2f}", currency=tx["currency"],
+          remaining=f"{tx['amount']:,.2f}"),
+        reply_markup=_split_amount_keyboard(uid, tx["amount"], tx["currency"]),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_AMOUNT
+
+
+async def split_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    l   = lang(uid)
+    remaining = context.user_data.get("split_remaining", 0.0)
+    currency  = context.user_data.get("split_currency", "")
+    try:
+        amount = float(update.message.text.replace(",", "."))
+        if amount <= 0 or amount > remaining + SPLIT_REMAINDER_EPSILON:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            t(l, "split_invalid_amount", remaining=f"{remaining:,.2f}", currency=currency)
+        )
+        return S_SPLIT_AMOUNT
+
+    context.user_data["split_pending_amount"] = min(amount, remaining)
+    await update.message.reply_text(
+        t(l, "choose_new_category"),
+        reply_markup=category_keyboard(context.user_data.get("split_type", "expense"), uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_CATEGORY
+
+
+async def split_finish_clicked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    context.user_data["split_pending_amount"] = context.user_data.get("split_remaining", 0.0)
+    await query.edit_message_text(
+        t(l, "choose_new_category"),
+        reply_markup=category_keyboard(context.user_data.get("split_type", "expense"), uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_CATEGORY
+
+
+async def split_category_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query    = update.callback_query
+    await query.answer()
+    uid      = query.from_user.id
+    l        = lang(uid)
+    cat_key  = query.data[len("cat_"):]
+    amount   = context.user_data.get("split_pending_amount", 0.0)
+    currency = context.user_data.get("split_currency", "")
+
+    parts = context.user_data.setdefault("split_parts", [])
+    parts.append({"amount": amount, "category": cat_key})
+    remaining = max(0.0, context.user_data.get("split_remaining", 0.0) - amount)
+    context.user_data["split_remaining"] = remaining
+
+    if remaining <= SPLIT_REMAINDER_EPSILON:
+        return await _finalize_split(query, context, uid, l)
+
+    await query.edit_message_text(
+        t(l, "split_enter_amount",
+          total=f"{context.user_data.get('split_original_amount', 0.0):,.2f}", currency=currency,
+          remaining=f"{remaining:,.2f}"),
+        reply_markup=_split_amount_keyboard(uid, remaining, currency),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_SPLIT_AMOUNT
+
+
+async def _finalize_split(query, context: ContextTypes.DEFAULT_TYPE, uid: int, l: str):
+    tx_id    = context.user_data.get("split_tx_id")
+    parts    = context.user_data.get("split_parts", [])
+    t_type   = context.user_data.get("split_type", "expense")
+    currency = context.user_data.get("split_currency", "")
+
+    db.split_transaction(tx_id, parts)
+
+    lines = "\n".join(
+        f"• {category_label(p['category'], l)}: {p['amount']:,.2f} {currency}"
+        for p in parts
+    )
+    message_text = t(l, "split_done", count=len(parts)) + "\n\n" + lines
+
+    if t_type == "expense":
+        touched_categories = {p["category"] for p in parts}
+        needs_rates = any(db.get_budget_by_category(uid, c) is not None for c in touched_categories)
+        conversion_rates = await _fetch_rates_if_needed(needs_rates)
+        for c in touched_categories:
+            message_text += _budget_warning_text(uid, c, conversion_rates, l)
+
+    for key in ("split_tx_id", "split_type", "split_currency", "split_original_amount",
+                "split_remaining", "split_parts", "split_pending_amount"):
+        context.user_data.pop(key, None)
+
+    await query.edit_message_text(
+        message_text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+# ─── Transaction tags ───
+
+MAX_TAGS_PER_SUBMIT = 10
+MAX_TAG_LEN = 30
+
+
+def _format_tags_suffix(tags: list) -> str:
+    return f" 🏷{', '.join(tags)}" if tags else ""
+
+
+def _format_attachment_suffix(count: int) -> str:
+    return f" 📎{count}" if count else ""
+
+
+def _tags_manage_keyboard(uid: int, has_tags: bool) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(t(l, "tagop_add_btn"), callback_data="tagop_add")]]
+    if has_tags:
+        rows.append([InlineKeyboardButton(t(l, "tagop_remove_btn"), callback_data="tagop_remove")])
+    rows.append([InlineKeyboardButton(t(l, "tagop_done_btn"), callback_data="tagop_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _tags_remove_keyboard(tags: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(f"🗑 {tg}", callback_data=f"tagrm_{i}")] for i, tg in enumerate(tags)]
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="tagop_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _tags_manage_view(uid: int, l: str, tx_id: int):
+    tags = db.get_transaction_tags(tx_id)
+    tags_text = ", ".join(tags) if tags else t(l, "no_tags_yet")
+    return t(l, "tags_manage_header", tags=tags_text), _tags_manage_keyboard(uid, bool(tags))
+
+
+async def trans_tags_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    txns = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_tag"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="ttags"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_TAGS
+
+
+async def trans_select_tags(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    if not db.get_transaction(tx_id):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["tags_tx_id"] = tx_id
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def tags_manage_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    action = query.data
+    tx_id  = context.user_data.get("tags_tx_id")
+
+    if action == "tagop_done":
+        context.user_data.pop("tags_tx_id", None)
+        await query.edit_message_text(
+            t(l, "tags_done"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    if action == "tagop_add":
+        await query.edit_message_text(
+            t(l, "enter_tags"),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return S_TAGS_ADD_INPUT
+
+    # action == "tagop_remove"
+    tags = db.get_transaction_tags(tx_id)
+    context.user_data["tags_current"] = tags
+    await query.edit_message_text(
+        t(l, "choose_tag_to_remove"),
+        reply_markup=_tags_remove_keyboard(tags, uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TAGS_REMOVE_PICK
+
+
+async def tags_add_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("tags_tx_id")
+
+    candidates = [tg.strip()[:MAX_TAG_LEN] for tg in update.message.text.split(",")]
+    candidates = [tg for tg in candidates if tg][:MAX_TAGS_PER_SUBMIT]
+    if not candidates:
+        await update.message.reply_text(t(l, "invalid_tags"))
+        return S_TAGS_ADD_INPUT
+
+    db.add_transaction_tags(tx_id, candidates)
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def tags_remove_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("tags_tx_id")
+
+    if query.data != "tagop_back":
+        idx  = int(query.data[len("tagrm_"):])
+        tags = context.user_data.get("tags_current", [])
+        if 0 <= idx < len(tags):
+            db.remove_transaction_tag(tx_id, tags[idx])
+
+    text, kb = _tags_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_TAGS_MANAGE
+
+
+async def trans_browse_tag_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    tags = db.get_user_tags(uid)
+    if not tags:
+        await query.edit_message_text(
+            t(l, "no_tags_yet_global"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["browse_tags_list"] = tags
+    rows = [[InlineKeyboardButton(f"🏷 {tg}", callback_data=f"tagbrowse_{i}")] for i, tg in enumerate(tags)]
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    await query.edit_message_text(
+        t(l, "choose_tag_to_browse"),
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TAGS_BROWSE_PICK
+
+
+async def trans_browse_tag_picked(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    idx  = int(query.data[len("tagbrowse_"):])
+    tags = context.user_data.get("browse_tags_list", [])
+    if not (0 <= idx < len(tags)):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    tag = tags[idx]
+    txns = db.get_transactions_by_tag(uid, tag)[:20]
+    account_names = {a["id"]: a["name"] for a in db.get_accounts(uid)}
+    tags_by_tx = db.get_tags_for_transactions([tx["id"] for tx in txns])
+    attach_counts = db.count_attachments_for_transactions([tx["id"] for tx in txns])
+
+    text = t(l, "tag_transactions_header", tag=tag)
+    for tx in txns:
+        emoji    = "📈" if tx["type"] == "income" else "📉"
+        date_str = tx["created_at"][:10] if tx["created_at"] else "?"
+        text    += t(l, "transaction_line",
+                     emoji=emoji, date=date_str,
+                     amount=f"{tx['amount']:,.2f}", currency=tx["currency"],
+                     category=category_label(tx["category"], l),
+                     account=account_names.get(tx["account_id"], "—"),
+                     description=tx["description"] or "—",
+                     tags=_format_tags_suffix(tags_by_tx.get(tx["id"], [])),
+                     attachments=_format_attachment_suffix(attach_counts.get(tx["id"], 0)))
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+
+    context.user_data.pop("browse_tags_list", None)
+    await query.edit_message_text(
+        text,
+        reply_markup=back_keyboard(uid, "menu_transactions"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return ConversationHandler.END
+
+
+def _attach_manage_keyboard(uid: int, has_attachments: bool) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = [[InlineKeyboardButton(t(l, "attop_add_btn"), callback_data="attop_add")]]
+    if has_attachments:
+        rows.append([InlineKeyboardButton(t(l, "attop_view_btn"), callback_data="attop_view")])
+        rows.append([InlineKeyboardButton(t(l, "attop_remove_btn"), callback_data="attop_remove")])
+    rows.append([InlineKeyboardButton(t(l, "attop_done_btn"), callback_data="attop_done")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _attach_remove_keyboard(attachments: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for i, att in enumerate(attachments):
+        icon  = "📷" if att["file_type"] == "photo" else "📄"
+        label = f"🗑 {icon} #{i + 1}" + (f" {att['file_name']}" if att.get("file_name") else "")
+        rows.append([InlineKeyboardButton(label, callback_data=f"attrm_{i}")])
+    rows.append([InlineKeyboardButton(t(l, "back"), callback_data="attop_back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _attach_manage_view(uid: int, l: str, tx_id: int):
+    attachments = db.get_transaction_attachments(tx_id)
+    if attachments:
+        lines = []
+        for i, att in enumerate(attachments, 1):
+            icon = "📷" if att["file_type"] == "photo" else "📄"
+            name = att.get("file_name") or ""
+            lines.append(f"{i}. {icon} {name}".rstrip())
+        summary = "\n".join(lines)
+    else:
+        summary = t(l, "no_attachments_yet")
+    text = t(l, "attach_manage_header", attachments=summary)
+    return text, _attach_manage_keyboard(uid, bool(attachments))
+
+
+async def trans_attach_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid  = query.from_user.id
+    l    = lang(uid)
+    txns = db.get_transactions(uid, limit=20)
+    if not txns:
+        await query.edit_message_text(
+            t(l, "no_transactions"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_transaction_to_attach"),
+        reply_markup=_trans_select_keyboard(txns, uid, callback_prefix="tattach"),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_TRANS_SELECT_ATTACH
+
+
+async def trans_select_attach(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = int(query.data.split("_")[1])
+    if not db.get_transaction(tx_id):
+        await query.edit_message_text(
+            t(l, "error"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+    context.user_data["attach_tx_id"] = tx_id
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
+
+
+async def attach_manage_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query  = update.callback_query
+    await query.answer()
+    uid    = query.from_user.id
+    l      = lang(uid)
+    action = query.data
+    tx_id  = context.user_data.get("attach_tx_id")
+
+    if action == "attop_done":
+        context.user_data.pop("attach_tx_id", None)
+        await query.edit_message_text(
+            t(l, "attach_done"),
+            reply_markup=back_keyboard(uid, "menu_transactions"),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return ConversationHandler.END
+
+    if action == "attop_add":
+        await query.edit_message_text(
+            t(l, "attach_send_file"),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+            ]),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return S_ATTACH_WAITING_FILE
+
+    if action == "attop_view":
+        attachments = db.get_transaction_attachments(tx_id)
+        for att in attachments:
+            if att["file_type"] == "photo":
+                await context.bot.send_photo(chat_id=uid, photo=att["file_id"])
+            else:
+                await context.bot.send_document(chat_id=uid, document=att["file_id"],
+                                                 filename=att.get("file_name"))
+        text, kb = _attach_manage_view(uid, l, tx_id)
+        await context.bot.send_message(chat_id=uid, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        return S_ATTACH_MANAGE
+
+    # action == "attop_remove"
+    attachments = db.get_transaction_attachments(tx_id)
+    context.user_data["attach_current"] = attachments
+    await query.edit_message_text(
+        t(l, "choose_attachment_to_remove"),
+        reply_markup=_attach_remove_keyboard(attachments, uid),
+        parse_mode=ParseMode.MARKDOWN,
+    )
+    return S_ATTACH_REMOVE_PICK
+
+
+async def attach_file_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("attach_tx_id")
+
+    if update.message.photo:
+        file_id   = update.message.photo[-1].file_id
+        file_type = "photo"
+        file_name = None
+    elif update.message.document:
+        file_id   = update.message.document.file_id
+        file_type = "document"
+        file_name = update.message.document.file_name
+    else:
+        await update.message.reply_text(t(l, "attach_wrong_type"))
+        return S_ATTACH_WAITING_FILE
+
+    db.add_transaction_attachment(tx_id, file_id, file_type, file_name)
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await update.message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
+
+
+async def attach_remove_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid   = query.from_user.id
+    l     = lang(uid)
+    tx_id = context.user_data.get("attach_tx_id")
+
+    if query.data != "attop_back":
+        idx         = int(query.data[len("attrm_"):])
+        attachments = context.user_data.get("attach_current", [])
+        if 0 <= idx < len(attachments):
+            db.delete_transaction_attachment(attachments[idx]["id"])
+
+    text, kb = _attach_manage_view(uid, l, tx_id)
+    await query.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    return S_ATTACH_MANAGE
 
 
 async def cb_clear_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2497,6 +3079,92 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Split transaction into multiple categories ──
+    trans_split_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_split_start, pattern="^trans_split$")],
+        states={
+            S_TRANS_SELECT_SPLIT: [
+                CallbackQueryHandler(trans_select_split, pattern="^tsplit_"),
+            ],
+            S_SPLIT_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, split_amount_entered),
+                CallbackQueryHandler(split_finish_clicked, pattern="^split_finish$"),
+            ],
+            S_SPLIT_CATEGORY: [
+                CallbackQueryHandler(split_category_picked, pattern="^cat_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Manage a transaction's tags ──
+    trans_tags_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_tags_start, pattern="^trans_tags$")],
+        states={
+            S_TRANS_SELECT_TAGS: [
+                CallbackQueryHandler(trans_select_tags, pattern="^ttags_"),
+            ],
+            S_TAGS_MANAGE: [
+                CallbackQueryHandler(tags_manage_router, pattern="^tagop_(add|remove|done)$"),
+            ],
+            S_TAGS_ADD_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, tags_add_input),
+            ],
+            S_TAGS_REMOVE_PICK: [
+                CallbackQueryHandler(tags_remove_pick, pattern="^tagrm_|^tagop_back$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Manage a transaction's attachments (receipts/photos) ──
+    trans_attach_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_attach_start, pattern="^trans_attach$")],
+        states={
+            S_TRANS_SELECT_ATTACH: [
+                CallbackQueryHandler(trans_select_attach, pattern="^tattach_"),
+            ],
+            S_ATTACH_MANAGE: [
+                CallbackQueryHandler(attach_manage_router, pattern="^attop_(add|view|remove|done)$"),
+            ],
+            S_ATTACH_WAITING_FILE: [
+                MessageHandler(filters.PHOTO | filters.Document.ALL, attach_file_received),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, attach_file_received),
+            ],
+            S_ATTACH_REMOVE_PICK: [
+                CallbackQueryHandler(attach_remove_pick, pattern="^attrm_|^attop_back$"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Browse transactions by tag ──
+    trans_browse_tag_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(trans_browse_tag_start, pattern="^trans_browse_tag$")],
+        states={
+            S_TAGS_BROWSE_PICK: [
+                CallbackQueryHandler(trans_browse_tag_picked, pattern="^tagbrowse_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add transaction (requires account selection first) ──
     trans_conv = ConversationHandler(
         entry_points=[
@@ -2749,7 +3417,8 @@ def build_application() -> Application:
     # Register conversations (stats_custom_conv first — most specific entry pattern)
     for conv in [
         stats_custom_conv,
-        trans_delete_conv, trans_edit_category_conv, trans_conv,
+        trans_delete_conv, trans_edit_category_conv, trans_split_conv,
+        trans_tags_conv, trans_browse_tag_conv, trans_attach_conv, trans_conv,
         account_add_conv, account_delete_conv, account_edit_balance_conv, import_conv,
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,

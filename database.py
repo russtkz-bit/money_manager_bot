@@ -125,6 +125,27 @@ def init_db():
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 CREATE INDEX IF NOT EXISTS idx_custom_categories_user ON custom_categories (user_id);
+
+                CREATE TABLE IF NOT EXISTS transaction_tags (
+                    id             BIGSERIAL PRIMARY KEY,
+                    transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    tag            TEXT NOT NULL,
+                    UNIQUE (transaction_id, tag)
+                );
+                CREATE INDEX IF NOT EXISTS idx_transaction_tags_transaction ON transaction_tags (transaction_id);
+                CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag ON transaction_tags (tag);
+
+                CREATE TABLE IF NOT EXISTS transaction_attachments (
+                    id             BIGSERIAL PRIMARY KEY,
+                    transaction_id BIGINT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                    file_id        TEXT NOT NULL,
+                    file_type      TEXT NOT NULL DEFAULT 'photo'
+                                       CHECK (file_type IN ('photo','document')),
+                    file_name      TEXT,
+                    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS idx_transaction_attachments_transaction
+                    ON transaction_attachments (transaction_id);
             """)
             # Migration: add account_id to transactions if it doesn't exist yet
             cur.execute("""
@@ -279,6 +300,28 @@ def _compute_balance_in_cur(cur, account_id: int, initial_balance: float) -> flo
     return balance
 
 
+def compute_balance_as_of(account_id: int, initial_balance: float, as_of_date: str) -> float:
+    """Same math as _compute_balance_in_cur, but only counting transactions
+    up to (and including) as_of_date — reconstructs what the account's
+    balance actually was at a point in the past, for the net worth history
+    chart. Not the same as _compute_balance_in_cur(..., no date filter),
+    which is always "as of right now"."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT type, COALESCE(SUM(amount), 0) AS total FROM transactions "
+                "WHERE account_id=%s AND created_at::date <= %s GROUP BY type",
+                (account_id, as_of_date)
+            )
+            balance = initial_balance
+            for row in cur.fetchall():
+                if row["type"] == "income":
+                    balance += float(row["total"])
+                else:
+                    balance -= float(row["total"])
+            return balance
+
+
 def get_accounts_with_balances(user_id: int) -> List[Dict]:
     """Return accounts list with extra 'computed_balance' field each."""
     with get_connection() as conn:
@@ -412,6 +455,206 @@ def update_transaction_category(transaction_id: int, category: str):
                 "UPDATE transactions SET category=%s WHERE id=%s",
                 (category, transaction_id)
             )
+
+
+def split_transaction(transaction_id: int, parts: List[Dict]) -> List[int]:
+    """Replaces one transaction with several, each carrying its own share
+    of the amount and its own category — everything else (account, type,
+    currency, date, description) copied from the original. `parts` is
+    [{"amount": float, "category": str}, ...] and the caller is
+    responsible for making them sum to the original amount; this function
+    just executes the split, it doesn't re-check the arithmetic.
+
+    Deliberately not a new schema (a "splits" table, a parent/child link on
+    transactions) — every existing budget/stats/recurring/export query
+    already aggregates by plain (category, amount) rows, so N ordinary
+    transactions that happen to add up to what one used to be need zero
+    changes anywhere else. Runs as one connection/transaction, so a crash
+    mid-way rolls back to the original single transaction rather than
+    leaving it deleted with only some parts inserted.
+
+    The original's tags and attachments are copied onto every resulting
+    part (they described the whole purchase, so each part it's divided
+    into should keep them too) — otherwise deleting the original row would
+    silently cascade-delete them.
+
+    Returns the new transaction ids, or [] if transaction_id didn't exist.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM transactions WHERE id=%s", (transaction_id,))
+            orig = cur.fetchone()
+            if not orig:
+                return []
+            cur.execute("SELECT tag FROM transaction_tags WHERE transaction_id=%s", (transaction_id,))
+            orig_tags = [r["tag"] for r in cur.fetchall()]
+            cur.execute(
+                "SELECT file_id, file_type, file_name FROM transaction_attachments WHERE transaction_id=%s",
+                (transaction_id,)
+            )
+            orig_attachments = cur.fetchall()
+            cur.execute("DELETE FROM transactions WHERE id=%s", (transaction_id,))
+            new_ids = []
+            for part in parts:
+                cur.execute(
+                    "INSERT INTO transactions "
+                    "(user_id, account_id, type, amount, currency, category, description, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (orig["user_id"], orig["account_id"], orig["type"], part["amount"],
+                     orig["currency"], part["category"], orig["description"], orig["created_at"])
+                )
+                new_id = cur.fetchone()["id"]
+                new_ids.append(new_id)
+                for tag in orig_tags:
+                    cur.execute(
+                        "INSERT INTO transaction_tags (transaction_id, tag) VALUES (%s,%s) "
+                        "ON CONFLICT DO NOTHING",
+                        (new_id, tag)
+                    )
+                for att in orig_attachments:
+                    cur.execute(
+                        "INSERT INTO transaction_attachments (transaction_id, file_id, file_type, file_name) "
+                        "VALUES (%s,%s,%s,%s)",
+                        (new_id, att["file_id"], att["file_type"], att["file_name"])
+                    )
+            return new_ids
+
+
+# ──────────────── TRANSACTION TAGS ────────────────
+
+def add_transaction_tags(transaction_id: int, tags: List[str]) -> List[str]:
+    """Adds each tag to the transaction, skipping ones already there
+    (exact-string duplicates only — "Work" and "work" are kept distinct,
+    same as the user typed them). Returns the tags that were actually new."""
+    added = []
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            for tag in tags:
+                cur.execute(
+                    "INSERT INTO transaction_tags (transaction_id, tag) VALUES (%s, %s) "
+                    "ON CONFLICT (transaction_id, tag) DO NOTHING RETURNING tag",
+                    (transaction_id, tag)
+                )
+                row = cur.fetchone()
+                if row:
+                    added.append(row["tag"])
+    return added
+
+
+def get_transaction_tags(transaction_id: int) -> List[str]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT tag FROM transaction_tags WHERE transaction_id=%s ORDER BY tag",
+                (transaction_id,)
+            )
+            return [r["tag"] for r in cur.fetchall()]
+
+
+def remove_transaction_tag(transaction_id: int, tag: str):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM transaction_tags WHERE transaction_id=%s AND tag=%s",
+                (transaction_id, tag)
+            )
+
+
+def get_user_tags(user_id: int) -> List[str]:
+    """Every distinct tag this user has used, across all their transactions
+    — for a "browse by tag" picker."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT tt.tag FROM transaction_tags tt "
+                "JOIN transactions t ON t.id = tt.transaction_id "
+                "WHERE t.user_id=%s ORDER BY tt.tag",
+                (user_id,)
+            )
+            return [r["tag"] for r in cur.fetchall()]
+
+
+def get_transactions_by_tag(user_id: int, tag: str) -> List[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT t.* FROM transactions t "
+                "JOIN transaction_tags tt ON tt.transaction_id = t.id "
+                "WHERE t.user_id=%s AND tt.tag=%s ORDER BY t.created_at DESC",
+                (user_id, tag)
+            )
+            return [_norm_tx(dict(r)) for r in cur.fetchall()]
+
+
+def get_tags_for_transactions(transaction_ids: List[int]) -> Dict[int, List[str]]:
+    """Batch tag lookup for a list of transaction ids, keyed by id — avoids
+    an N+1 query when a whole list of transactions each need their tags
+    (viewing history, exporting it), one query instead of one per row."""
+    if not transaction_ids:
+        return {}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT transaction_id, tag FROM transaction_tags "
+                "WHERE transaction_id = ANY(%s) ORDER BY tag",
+                (transaction_ids,)
+            )
+            result: Dict[int, List[str]] = {}
+            for r in cur.fetchall():
+                result.setdefault(r["transaction_id"], []).append(r["tag"])
+            return result
+
+
+# ──────────────── TRANSACTION ATTACHMENTS ────────────────
+#
+# Stores Telegram's own file_id, not the file bytes — Telegram already hosts
+# the upload permanently; re-sending an attachment later is just handing
+# that file_id back to send_photo/send_document, no download/storage of our
+# own needed.
+
+def add_transaction_attachment(transaction_id: int, file_id: str,
+                               file_type: str, file_name: Optional[str] = None) -> int:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO transaction_attachments (transaction_id, file_id, file_type, file_name) "
+                "VALUES (%s,%s,%s,%s) RETURNING id",
+                (transaction_id, file_id, file_type, file_name)
+            )
+            return cur.fetchone()["id"]
+
+
+def get_transaction_attachments(transaction_id: int) -> List[Dict]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM transaction_attachments WHERE transaction_id=%s ORDER BY created_at ASC",
+                (transaction_id,)
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def delete_transaction_attachment(attachment_id: int):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM transaction_attachments WHERE id=%s", (attachment_id,))
+
+
+def count_attachments_for_transactions(transaction_ids: List[int]) -> Dict[int, int]:
+    """Batch attachment count per transaction id — a 📎 indicator in a
+    transaction list needs to know "how many", not the attachments
+    themselves, so this skips fetching file_id/file_name for rows that are
+    never going to be displayed inline in a text list anyway."""
+    if not transaction_ids:
+        return {}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT transaction_id, COUNT(*) AS cnt FROM transaction_attachments "
+                "WHERE transaction_id = ANY(%s) GROUP BY transaction_id",
+                (transaction_ids,)
+            )
+            return {r["transaction_id"]: r["cnt"] for r in cur.fetchall()}
 
 
 def delete_all_transactions(user_id: int) -> int:

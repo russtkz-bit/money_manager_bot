@@ -141,6 +141,12 @@ th { color: var(--text-dim); font-weight: 600; }
   background: var(--grid-line);
   color: var(--text-dim);
   font-size: 0.78em;
+  margin: 0 2px 2px 0;
+}
+
+.pill-tag {
+  background: transparent;
+  border: 1px solid var(--grid-line);
 }
 
 .progress-track {
