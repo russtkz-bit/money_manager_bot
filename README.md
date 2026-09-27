@@ -13,6 +13,7 @@ detection. Supports **English** and **Russian** languages.
 |---|---|
 | 🏦 **Accounts** | Track balances across bank cards, crypto exchanges, and cash — each with its own currency |
 | 💸 **Transactions** | Add income/expense per account, with category and description |
+| 🏷 **Custom Categories** | Add your own categories (name + emoji, scoped to income/expense/both) — they show up alongside the built-in ones everywhere |
 | 📐 **Budgets** | Set a monthly limit per category; get warned in-chat when you're near or over it |
 | 🎯 **Goals** | Set savings or loan repayment goals with deadlines, tracked against your account balances |
 | 🔁 **Recurring Expenses** | Detects expenses that repeat month over month and estimates next month's recurring spend |

@@ -82,7 +82,11 @@ logger = logging.getLogger(__name__)
 
     # Edit transaction category
     S_TRANS_SELECT_EDIT_CATEGORY, S_TRANS_EDIT_CATEGORY_PICK,
-) = range(34)
+
+    # Custom categories
+    S_CATEGORY_TYPE, S_CATEGORY_NAME, S_CATEGORY_EMOJI,
+    S_CATEGORY_SELECT_DELETE,
+) = range(38)
 
 # Currency rows for keyboard
 CURRENCY_ROW_1 = ["USD", "EUR", "RUB", "KZT"]
@@ -115,7 +119,8 @@ def main_menu_keyboard(uid: int) -> InlineKeyboardMarkup:
          InlineKeyboardButton(t(l, "btn_budgets"),      callback_data="menu_budgets")],
         [InlineKeyboardButton(t(l, "btn_currencies"),   callback_data="menu_currencies"),
          InlineKeyboardButton(t(l, "btn_statistics"),   callback_data="menu_stats")],
-        [InlineKeyboardButton(t(l, "btn_settings"),     callback_data="menu_settings")],
+        [InlineKeyboardButton(t(l, "btn_categories"),   callback_data="menu_categories"),
+         InlineKeyboardButton(t(l, "btn_settings"),     callback_data="menu_settings")],
     ])
 
 
@@ -175,38 +180,51 @@ def currency_keyboard(callback_prefix: str, uid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _category_items(t_type: str, uid: int) -> list:
+    """(key, label) pairs for every category a transaction of this type can
+    use — the built-in fixed set plus this user's custom ones (their own
+    'both'-type categories included)."""
+    l = lang(uid)
+    base_keys = INCOME_CATEGORY_KEYS if t_type == "income" else EXPENSE_CATEGORY_KEYS
+    items = [(k, t(l, f"cat_{k}")) for k in base_keys]
+    items += [(c["key"], f"{c['emoji']} {c['name']}") for c in db.get_custom_categories(uid, t_type)]
+    return items
+
+
 def category_keyboard(t_type: str, uid: int) -> InlineKeyboardMarkup:
     l = lang(uid)
-    cats = INCOME_CATEGORY_KEYS if t_type == "income" else EXPENSE_CATEGORY_KEYS
+    items = _category_items(t_type, uid)
     rows = []
-    for i in range(0, len(cats), 2):
-        row = [InlineKeyboardButton(t(l, f"cat_{cats[i]}"), callback_data=f"cat_{cats[i]}")]
-        if i + 1 < len(cats):
-            row.append(InlineKeyboardButton(t(l, f"cat_{cats[i + 1]}"), callback_data=f"cat_{cats[i + 1]}"))
+    for i in range(0, len(items), 2):
+        row = [InlineKeyboardButton(items[i][1], callback_data=f"cat_{items[i][0]}")]
+        if i + 1 < len(items):
+            row.append(InlineKeyboardButton(items[i + 1][1], callback_data=f"cat_{items[i + 1][0]}"))
         rows.append(row)
     rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
     return InlineKeyboardMarkup(rows)
 
 
 def budget_category_keyboard(uid: int, existing_categories: set) -> InlineKeyboardMarkup:
-    """Category picker for budgets — expense categories only, marks ones that already have a budget."""
+    """Category picker for budgets — expense (+ 'both' custom) categories only,
+    marks ones that already have a budget."""
     l = lang(uid)
+    items = _category_items("expense", uid)
     rows = []
-    cats = EXPENSE_CATEGORY_KEYS
-    for i in range(0, len(cats), 2):
-        row = [InlineKeyboardButton(_budget_cat_btn_label(cats[i], l, existing_categories),
-                                     callback_data=f"bcat_{cats[i]}")]
-        if i + 1 < len(cats):
-            row.append(InlineKeyboardButton(_budget_cat_btn_label(cats[i + 1], l, existing_categories),
-                                             callback_data=f"bcat_{cats[i + 1]}"))
+    for i in range(0, len(items), 2):
+        row = [InlineKeyboardButton(_budget_cat_btn_label(items[i], existing_categories),
+                                     callback_data=f"bcat_{items[i][0]}")]
+        if i + 1 < len(items):
+            row.append(InlineKeyboardButton(_budget_cat_btn_label(items[i + 1], existing_categories),
+                                             callback_data=f"bcat_{items[i + 1][0]}"))
         rows.append(row)
     rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
     return InlineKeyboardMarkup(rows)
 
 
-def _budget_cat_btn_label(key: str, l: str, existing_categories: set) -> str:
+def _budget_cat_btn_label(item: tuple, existing_categories: set) -> str:
+    key, label = item
     mark = "✅ " if key in existing_categories else ""
-    return mark + t(l, f"cat_{key}")
+    return mark + label
 
 
 def budgets_select_keyboard(budgets: list, uid: int) -> InlineKeyboardMarkup:
@@ -215,6 +233,37 @@ def budgets_select_keyboard(budgets: list, uid: int) -> InlineKeyboardMarkup:
     for b in budgets:
         label = f"{category_label(b['category'], l)} — {b['amount']:,.2f} {b['currency']}"
         rows.append([InlineKeyboardButton(label, callback_data=f"bdel_{b['id']}")])
+    rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def categories_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "btn_add_category"),    callback_data="customcat_add")],
+        [InlineKeyboardButton(t(l, "btn_view_categories"), callback_data="customcat_view")],
+        [InlineKeyboardButton(t(l, "btn_delete_category"), callback_data="customcat_delete")],
+        [InlineKeyboardButton(t(l, "back"),                callback_data="back_main")],
+    ])
+
+
+def category_type_keyboard(uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(l, "category_type_income"),  callback_data="cattype_income"),
+         InlineKeyboardButton(t(l, "category_type_expense"), callback_data="cattype_expense")],
+        [InlineKeyboardButton(t(l, "category_type_both"),    callback_data="cattype_both")],
+        [InlineKeyboardButton(t(l, "cancel"),                callback_data="conv_cancel")],
+    ])
+
+
+def categories_select_keyboard(categories: list, uid: int) -> InlineKeyboardMarkup:
+    l = lang(uid)
+    rows = []
+    for c in categories:
+        rows.append([InlineKeyboardButton(
+            f"{c['emoji']} {c['name']}", callback_data=f"ccatdel_{c['key']}"
+        )])
     rows.append([InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")])
     return InlineKeyboardMarkup(rows)
 
@@ -555,6 +604,15 @@ async def cb_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "account_view":
         await handle_view_accounts(update, context)
+
+    elif query.data == "menu_categories":
+        await query.edit_message_text(
+            t(l, "categories_menu_header"),
+            reply_markup=categories_keyboard(uid),
+            parse_mode=ParseMode.MARKDOWN
+        )
+    elif query.data == "customcat_view":
+        await handle_view_categories(update, context)
 
 
 # ─────────────────── CURRENCIES ───────────────────
@@ -1470,6 +1528,141 @@ async def import_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ─────────────────── CUSTOM CATEGORIES ───────────────────
+
+MAX_CATEGORY_NAME_LEN = 40
+MAX_CATEGORY_EMOJI_LEN = 8
+
+
+async def handle_view_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid   = query.from_user.id
+    l     = lang(uid)
+    categories = db.get_custom_categories(uid)
+    if not categories:
+        await query.edit_message_text(
+            t(l, "no_custom_categories"),
+            reply_markup=back_keyboard(uid, "menu_categories"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    type_labels = {
+        "income": t(l, "category_type_income"),
+        "expense": t(l, "category_type_expense"),
+        "both": t(l, "category_type_both"),
+    }
+    text = t(l, "categories_header")
+    for c in categories:
+        text += t(l, "category_line",
+                  emoji=c["emoji"], name=c["name"],
+                  type=type_labels.get(c["category_type"], c["category_type"]))
+    await query.edit_message_text(
+        text,
+        reply_markup=back_keyboard(uid, "menu_categories"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def category_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    await query.edit_message_text(
+        t(l, "choose_category_type"),
+        reply_markup=category_type_keyboard(uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_CATEGORY_TYPE
+
+
+async def category_type_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    context.user_data["new_category_type"] = query.data[len("cattype_"):]
+    await query.edit_message_text(
+        t(l, "enter_category_name"),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(l, "cancel"), callback_data="conv_cancel")]
+        ]),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_CATEGORY_NAME
+
+
+async def category_name_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid  = update.effective_user.id
+    l    = lang(uid)
+    name = update.message.text.strip()
+    if not name or len(name) > MAX_CATEGORY_NAME_LEN:
+        await update.message.reply_text(t(l, "invalid_category_name", max=MAX_CATEGORY_NAME_LEN))
+        return S_CATEGORY_NAME
+    context.user_data["new_category_name"] = name
+    await update.message.reply_text(t(l, "enter_category_emoji"), parse_mode=ParseMode.MARKDOWN)
+    return S_CATEGORY_EMOJI
+
+
+async def category_emoji_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid   = update.effective_user.id
+    l     = lang(uid)
+    emoji = update.message.text.strip()
+    if not emoji or len(emoji) > MAX_CATEGORY_EMOJI_LEN:
+        await update.message.reply_text(t(l, "invalid_category_emoji", max=MAX_CATEGORY_EMOJI_LEN))
+        return S_CATEGORY_EMOJI
+
+    name          = context.user_data.get("new_category_name", "?")
+    category_type = context.user_data.get("new_category_type", "both")
+    db.add_custom_category(uid, name, emoji, category_type)
+
+    context.user_data.pop("new_category_type", None)
+    context.user_data.pop("new_category_name", None)
+
+    await update.message.reply_text(
+        t(l, "category_added", emoji=emoji, name=name),
+        reply_markup=back_keyboard(uid, "menu_categories"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
+async def category_delete_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    categories = db.get_custom_categories(uid)
+    if not categories:
+        await query.edit_message_text(
+            t(l, "no_custom_categories"),
+            reply_markup=back_keyboard(uid, "menu_categories"),
+            parse_mode=ParseMode.MARKDOWN
+        )
+        return ConversationHandler.END
+    await query.edit_message_text(
+        t(l, "choose_category_to_delete"),
+        reply_markup=categories_select_keyboard(categories, uid),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return S_CATEGORY_SELECT_DELETE
+
+
+async def category_select_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    l   = lang(uid)
+    key = query.data[len("ccatdel_"):]
+    db.delete_custom_category(uid, key)
+    await query.edit_message_text(
+        t(l, "category_deleted"),
+        reply_markup=back_keyboard(uid, "menu_categories"),
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
+
 # ─────────────────── BUDGETS ───────────────────
 
 async def handle_view_budgets(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2280,6 +2473,42 @@ def build_application() -> Application:
         per_message=False,
     )
 
+    # ── Add custom category ──
+    category_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(category_add_start, pattern="^customcat_add$")],
+        states={
+            S_CATEGORY_TYPE: [
+                CallbackQueryHandler(category_type_chosen, pattern="^cattype_"),
+            ],
+            S_CATEGORY_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, category_name_entered),
+            ],
+            S_CATEGORY_EMOJI: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, category_emoji_entered),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
+    # ── Delete custom category ──
+    category_delete_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(category_delete_start, pattern="^customcat_delete$")],
+        states={
+            S_CATEGORY_SELECT_DELETE: [
+                CallbackQueryHandler(category_select_delete, pattern="^ccatdel_"),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(conv_cancel, pattern="^conv_cancel$"),
+            CommandHandler("cancel", text_cancel),
+        ],
+        per_message=False,
+    )
+
     # ── Add / update budget ──
     budget_add_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(budget_add_start, pattern="^budget_add$")],
@@ -2404,6 +2633,7 @@ def build_application() -> Application:
         budget_add_conv, budget_delete_conv,
         goal_add_conv, goal_edit_conv, goal_delete_conv, goal_convert_conv,
         settings_cur_conv,
+        category_add_conv, category_delete_conv,
     ]:
         app.add_handler(conv)
 
@@ -2417,8 +2647,8 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(
         cb_main_menu,
         pattern="^(back_main|menu_transactions|menu_goals|menu_accounts|menu_budgets|menu_currencies|"
-                "menu_stats|menu_settings|settings_language|"
-                "trans_view|trans_clear|goal_view|account_view|budget_view)$"
+                "menu_stats|menu_settings|menu_categories|settings_language|"
+                "trans_view|trans_clear|goal_view|account_view|budget_view|customcat_view)$"
     ))
 
     app.add_handler(CallbackQueryHandler(cb_back_stats,               pattern="^back_stats$"))
