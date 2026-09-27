@@ -10,6 +10,12 @@
       <div class="label">{{ t(lang, 'web_forecast_current') }}</div>
       <div class="value">{{ "%.2f"|format(current) }} {{ base_currency }}</div>
     </div>
+    {% if history_months and history_months > 0 %}
+    <div class="stat-tile">
+      <div class="label">{{ t(lang, 'web_forecast_history', months=history_months) }}</div>
+      <div class="value {{ 'positive' if history_change >= 0 else 'negative' }}">{{ "%.2f"|format(history_change) }} {{ base_currency }}</div>
+    </div>
+    {% endif %}
     <div class="stat-tile">
       <div class="label">{{ t(lang, 'web_forecast_monthly_net') }}</div>
       <div class="value {{ 'positive' if monthly_net >= 0 else 'negative' }}">{{ "%.2f"|format(monthly_net) }} {{ base_currency }}</div>
@@ -25,8 +31,8 @@
   {% endif %}
 
   <div class="card">
-    <h2>{{ t(lang, 'web_nav_forecast') }}</h2>
-    <img class="chart-img" src="/forecast/chart.png" alt="{{ t(lang, 'web_nav_forecast') }}">
+    <h2>{{ t(lang, 'forecast_chart_title') }}</h2>
+    <img class="chart-img" src="/forecast/chart.png" alt="{{ t(lang, 'forecast_chart_title') }}">
   </div>
 {% endif %}
 

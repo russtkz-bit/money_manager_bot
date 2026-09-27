@@ -861,6 +861,12 @@ async def cb_stats_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = t(l, "forecast_header")
     text += t(l, "forecast_current", amount=f"{forecast['current']:,.2f}", currency=base_currency)
+    history_months = forecast["history_months"]
+    if history_months > 0:
+        history_change = forecast["current"] - forecast["points"][0][1]
+        history_key = "forecast_history_positive" if history_change >= 0 else "forecast_history_negative"
+        text += t(l, history_key, months=history_months,
+                 amount=f"{abs(history_change):,.2f}", currency=base_currency)
     if forecast["monthly_net"] >= 0:
         text += t(l, "forecast_monthly_net_positive", amount=f"{forecast['monthly_net']:,.2f}", currency=base_currency)
     else:
@@ -871,7 +877,7 @@ async def cb_stats_forecast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not forecast["all_converted"]:
         text += "\n" + t(l, "rates_incomplete_note")
 
-    img = ch.generate_forecast_chart(forecast["points"], base_currency, title=t(l, "btn_forecast"))
+    img = ch.generate_forecast_chart(forecast["points"], base_currency, title=t(l, "forecast_chart_title"))
     if img:
         await context.bot.send_photo(chat_id=uid, photo=BytesIO(img))
     await context.bot.send_message(

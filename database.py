@@ -279,6 +279,28 @@ def _compute_balance_in_cur(cur, account_id: int, initial_balance: float) -> flo
     return balance
 
 
+def compute_balance_as_of(account_id: int, initial_balance: float, as_of_date: str) -> float:
+    """Same math as _compute_balance_in_cur, but only counting transactions
+    up to (and including) as_of_date — reconstructs what the account's
+    balance actually was at a point in the past, for the net worth history
+    chart. Not the same as _compute_balance_in_cur(..., no date filter),
+    which is always "as of right now"."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT type, COALESCE(SUM(amount), 0) AS total FROM transactions "
+                "WHERE account_id=%s AND created_at::date <= %s GROUP BY type",
+                (account_id, as_of_date)
+            )
+            balance = initial_balance
+            for row in cur.fetchall():
+                if row["type"] == "income":
+                    balance += float(row["total"])
+                else:
+                    balance -= float(row["total"])
+            return balance
+
+
 def get_accounts_with_balances(user_id: int) -> List[Dict]:
     """Return accounts list with extra 'computed_balance' field each."""
     with get_connection() as conn:

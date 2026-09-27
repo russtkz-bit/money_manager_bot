@@ -387,12 +387,15 @@ async def forecast_page(request: Request):
 
     forecast = finance.forecast_net_worth(user_id, base_currency, fiat, crypto, metals, accounts=accounts)
     months_ahead = forecast["points"][-1][0]
+    history_months = forecast["history_months"]
+    history_change = forecast["current"] - forecast["points"][0][1] if history_months > 0 else None
 
     return render(
         request, "forecast.html", active="forecast",
         has_data=True, base_currency=base_currency,
         current=forecast["current"], monthly_net=forecast["monthly_net"],
         months_ahead=months_ahead, projected=forecast["points"][-1][1],
+        history_months=history_months, history_change=history_change,
         incomplete=not forecast["all_converted"],
     )
 
@@ -408,7 +411,7 @@ async def forecast_chart(request: Request):
     lang = db.get_user_lang(user_id)
     forecast = finance.forecast_net_worth(user_id, base_currency, fiat, crypto, metals, accounts=accounts)
     img = ch.generate_forecast_chart(
-        forecast["points"], base_currency, title=translate(lang, "web_nav_forecast")
+        forecast["points"], base_currency, title=translate(lang, "forecast_chart_title")
     )
     if not img:
         return Response(status_code=204)
